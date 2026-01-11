@@ -64,30 +64,33 @@ server.registerTool(
     title: "Get Skills",
     description: "Get all skills with proficiency levels, optionally filtered by category or level",
     inputSchema: {
-      category: z.string().optional().describe("Filter by category (e.g., 'Frontend', 'Backend', 'DevOps')"),
+      category: z.string().optional().describe("Filter by category (e.g., 'programming_languages', 'frameworks_and_libraries', 'databases')"),
       min_level: z.enum(["none", "novice", "apprentice", "adept", "expert", "master"]).optional().describe("Minimum proficiency level"),
     },
     outputSchema: textContentOutputSchema,
   },
   async ({ category, min_level }) => {
-    const skills = await readJsonFile<SkillsData>("profile/skills.json");
+    const skills = await readJsonFile<Record<string, unknown>>("profile/skills.json");
 
-    const levelOrder = skills.skill_levels;
+    // Level order for comparison
+    const levelOrder = ["none", "novice", "apprentice", "adept", "expert", "master"];
     const minLevelIndex = min_level ? levelOrder.indexOf(min_level) : 0;
 
-    const result: SkillResult[] = [];
+    const result: Array<{ category: string; name: string; level: string }> = [];
 
-    for (const [cat, data] of Object.entries(skills.categories)) {
+    // Iterate over all categories (skip skill_levels which is metadata)
+    for (const [cat, skillsInCategory] of Object.entries(skills)) {
+      if (cat === "skill_levels") continue;
       if (category && cat.toLowerCase() !== category.toLowerCase()) continue;
+      if (typeof skillsInCategory !== "object" || skillsInCategory === null) continue;
 
-      for (const skill of data.skills) {
-        const skillLevelIndex = levelOrder.indexOf(skill.level);
+      for (const [skillName, level] of Object.entries(skillsInCategory as Record<string, string>)) {
+        const skillLevelIndex = levelOrder.indexOf(level);
         if (skillLevelIndex >= minLevelIndex) {
           result.push({
             category: cat,
-            name: skill.name,
-            level: skill.level,
-            notes: skill.notes,
+            name: skillName,
+            level: level,
           });
         }
       }
