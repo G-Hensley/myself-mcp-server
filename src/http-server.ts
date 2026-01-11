@@ -29,11 +29,13 @@ const GITHUB_REPO = "myself";
 const GITHUB_BRANCH = "main";
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN; // PAT for private repo access
 
-// Helper to fetch files from GitHub (supports private repos with PAT)
+// Helper to fetch files from GitHub API (supports private repos with PAT)
 async function fetchFromGitHub(relativePath: string): Promise<string> {
-  const url = `https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/${GITHUB_BRANCH}/${relativePath}`;
+  // Use GitHub Contents API for private repo support
+  const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${relativePath}?ref=${GITHUB_BRANCH}`;
   const headers: Record<string, string> = {
     "Accept": "application/vnd.github.raw+json",
+    "X-GitHub-Api-Version": "2022-11-28",
   };
 
   if (GITHUB_TOKEN) {
