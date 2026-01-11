@@ -24,8 +24,8 @@ import type {
   Idea,
 } from "./types.js";
 
-// Get the repo root (parent of mcp-server)
-const REPO_ROOT = path.resolve(process.cwd(), "..");
+// Get the repo root from cwd (set via Claude Desktop config)
+const REPO_ROOT = process.cwd();
 
 // Helper to read JSON files from the repo
 async function readJsonFile<T>(relativePath: string): Promise<T> {
