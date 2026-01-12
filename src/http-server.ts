@@ -4,7 +4,6 @@ import { z } from "zod";
 import * as http from "http";
 import type {
   SkillsData,
-  SkillResult,
   ExperienceData,
   ProjectsData,
   ProjectResult,
@@ -64,15 +63,8 @@ async function readMarkdownFile(relativePath: string): Promise<string> {
   return fetchFromGitHub(relativePath);
 }
 
-// Common output schema for all tools (MCP text content format)
-const textContentOutputSchema = z.object({
-  content: z.array(
-    z.object({
-      type: z.literal("text"),
-      text: z.string(),
-    })
-  ),
-});
+// Note: We don't use outputSchema because it requires structuredContent responses.
+// Our tools return plain text content which doesn't need schema validation.
 
 // Create the MCP server
 const server = new McpServer({
@@ -90,7 +82,7 @@ server.registerTool(
       category: z.string().optional().describe("Filter by category (e.g., 'programming_languages', 'frameworks_and_libraries', 'databases')"),
       min_level: z.enum(["none", "novice", "apprentice", "adept", "expert", "master"]).optional().describe("Minimum proficiency level"),
     },
-    outputSchema: textContentOutputSchema,
+
   },
   async ({ category, min_level }) => {
     const skills = await readJsonFile<Record<string, unknown>>("profile/skills.json");
@@ -134,7 +126,7 @@ server.registerTool(
     inputSchema: {
       current_only: z.boolean().optional().describe("Only return current positions"),
     },
-    outputSchema: textContentOutputSchema,
+
   },
   async ({ current_only }) => {
     const experience = await readJsonFile<ExperienceData>("profile/experience.json");
@@ -160,7 +152,7 @@ server.registerTool(
       status: z.enum(["active", "planned", "completed"]).optional().describe("Filter by project status"),
       tech: z.string().optional().describe("Filter by technology used"),
     },
-    outputSchema: textContentOutputSchema,
+
   },
   async ({ status, tech }) => {
     const files: Record<string, string> = {
@@ -206,7 +198,7 @@ server.registerTool(
       category: z.string().optional().describe("Filter by category (business, technical, community, content)"),
       status: z.enum(["in_progress", "not_started", "completed"]).optional().describe("Filter by goal status"),
     },
-    outputSchema: textContentOutputSchema,
+
   },
   async ({ category, status }) => {
     const goals = await readJsonFile<GoalsData>("profile/goals/2026-goals.json");
@@ -242,7 +234,7 @@ server.registerTool(
   {
     title: "Get Profile Summary",
     description: "Get a complete profile summary including contact info, summary, and key stats",
-    outputSchema: textContentOutputSchema,
+
   },
   async () => {
     const contact = await readJsonFile<ContactData>("profile/contact.json");
@@ -276,7 +268,7 @@ server.registerTool(
     inputSchema: {
       variant: z.string().optional().describe("Resume variant (e.g., 'full-stack-react', 'frontend-react', 'nextjs-focused', 'general-swe'). Leave empty for base resume."),
     },
-    outputSchema: textContentOutputSchema,
+
   },
   async ({ variant }) => {
     let resumePath = "profile/resume.md";
@@ -310,7 +302,7 @@ server.registerTool(
     inputSchema: {
       query: z.string().describe("Natural language query about profile, projects, goals, or skills"),
     },
-    outputSchema: textContentOutputSchema,
+
   },
   async ({ query }) => {
     const queryLower = query.toLowerCase();
@@ -379,7 +371,7 @@ server.registerTool(
       cluster: z.string().optional().describe("Filter by resume cluster (full-stack-react, frontend-react, nextjs-focused, general-swe)"),
       limit: z.number().optional().describe("Maximum number of jobs to return"),
     },
-    outputSchema: textContentOutputSchema,
+
   },
   async ({ cluster, limit }) => {
     try {
@@ -416,7 +408,7 @@ server.registerTool(
       business: z.enum(["codaissance", "tampertantrum-labs"]).describe("Which business to get info for"),
       include: z.array(z.enum(["strategy", "personas", "marketing"])).optional().describe("Which data to include (defaults to all)"),
     },
-    outputSchema: textContentOutputSchema,
+
   },
   async ({ business, include }) => {
     const includeAll = !include || include.length === 0;
@@ -464,7 +456,7 @@ server.registerTool(
     inputSchema: {
       section: z.enum(["current_focus", "queue", "backlog", "on_hold", "completed"]).optional().describe("Specific section to retrieve (defaults to all)"),
     },
-    outputSchema: textContentOutputSchema,
+
   },
   async ({ section }) => {
     const result: Record<string, unknown> = {};
@@ -507,7 +499,7 @@ server.registerTool(
       source: z.enum(["personal", "codaissance", "tampertantrum-labs", "all"]).optional().describe("Which idea source to retrieve (defaults to all)"),
       status: z.enum(["raw", "validating", "validated", "rejected", "moved_to_projects"]).optional().describe("Filter by idea status"),
     },
-    outputSchema: textContentOutputSchema,
+
   },
   async ({ source, status }) => {
     const sources: Record<string, string> = {
