@@ -532,6 +532,168 @@ server.registerTool(
   }
 );
 
+// Tool: Get Education
+server.registerTool(
+  "get_education",
+  {
+    title: "Get Education",
+    description: "Get education history including degrees, certifications, and self-taught learning",
+    inputSchema: {
+      include: z.array(z.enum(["degrees", "certifications", "self_taught"])).optional().describe("What to include (defaults to all)"),
+    },
+    outputSchema: textContentOutputSchema,
+  },
+  async ({ include }) => {
+    const education = await readJsonFile<Record<string, unknown>>("profile/education.json");
+    const includeAll = !include || include.length === 0;
+
+    const result: Record<string, unknown> = {};
+
+    if (includeAll || include?.includes("degrees")) {
+      // Extract degree entries (not certifications or certificates arrays)
+      const degrees: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(education)) {
+        if (key !== "certifications" && key !== "certificates" && typeof value === "object") {
+          degrees[key] = value;
+        }
+      }
+      result.degrees = degrees;
+    }
+
+    if (includeAll || include?.includes("certifications")) {
+      result.certifications = education.certifications || [];
+      result.certificates = education.certificates || [];
+    }
+
+    if (includeAll || include?.includes("self_taught")) {
+      result.self_taught = education.self_taught_learning || null;
+    }
+
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
+
+// Tool: Get Preferences
+server.registerTool(
+  "get_preferences",
+  {
+    title: "Get Preferences",
+    description: "Get work preferences including learning style, work environment, schedule, coding style, and tools",
+    inputSchema: {
+      category: z.enum(["learning", "work_environment", "schedule", "coding_style", "tools"]).optional().describe("Specific preference category (defaults to all)"),
+    },
+    outputSchema: textContentOutputSchema,
+  },
+  async ({ category }) => {
+    const preferences = await readJsonFile<Record<string, unknown>>("profile/preferences.json");
+
+    if (category) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ [category]: preferences[category] }, null, 2) }],
+      };
+    }
+
+    return {
+      content: [{ type: "text", text: JSON.stringify(preferences, null, 2) }],
+    };
+  }
+);
+
+// Tool: Get LinkedIn Metrics
+server.registerTool(
+  "get_linkedin_metrics",
+  {
+    title: "Get LinkedIn Metrics",
+    description: "Get LinkedIn metrics for personal account, Codaissance page, or TamperTantrum Labs page",
+    inputSchema: {
+      account: z.enum(["personal", "codaissance", "tampertantrum"]).optional().describe("Which account to get metrics for (defaults to all)"),
+    },
+    outputSchema: textContentOutputSchema,
+  },
+  async ({ account }) => {
+    const accounts: Record<string, string> = {
+      personal: "linkedin/personal-metrics.json",
+      codaissance: "linkedin/codaissance-metrics.json",
+      tampertantrum: "linkedin/tampertantrum-metrics.json",
+    };
+
+    const accountsToCheck = account ? [account] : ["personal", "codaissance", "tampertantrum"];
+    const result: Record<string, unknown> = {};
+
+    for (const acc of accountsToCheck) {
+      try {
+        const metrics = await readJsonFile<Record<string, unknown>>(accounts[acc]);
+        result[acc] = metrics;
+      } catch {
+        result[acc] = { error: "No metrics data available" };
+      }
+    }
+
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
+
+// Tool: Get Assessments
+server.registerTool(
+  "get_assessments",
+  {
+    title: "Get Assessments",
+    description: "Get self-assessments. Note: Returns list of available assessments or content of a specific one.",
+    inputSchema: {
+      date: z.string().optional().describe("Specific assessment date (YYYY-MM format, e.g., '2025-12'). Leave empty to get list of available assessments."),
+    },
+    outputSchema: textContentOutputSchema,
+  },
+  async ({ date }) => {
+    if (date) {
+      try {
+        const assessment = await readMarkdownFile(`assessments/${date}-assessment.md`);
+        return {
+          content: [{ type: "text", text: assessment }],
+        };
+      } catch {
+        return {
+          content: [{ type: "text", text: `Assessment for ${date} not found.` }],
+        };
+      }
+    }
+
+    // For local server, we could list directory, but keeping consistent with http-server
+    return {
+      content: [{ type: "text", text: "To get a specific assessment, provide a date in YYYY-MM format (e.g., '2025-12'). Assessments are stored as {date}-assessment.md files." }],
+    };
+  }
+);
+
+// Tool: Get Business Roadmap
+server.registerTool(
+  "get_business_roadmap",
+  {
+    title: "Get Business Roadmap",
+    description: "Get the product/consulting roadmap for Codaissance or TamperTantrum Labs",
+    inputSchema: {
+      business: z.enum(["codaissance", "tampertantrum-labs"]).describe("Which business roadmap to get"),
+    },
+    outputSchema: textContentOutputSchema,
+  },
+  async ({ business }) => {
+    try {
+      const roadmap = await readMarkdownFile(`business/${business}/roadmap.md`);
+      return {
+        content: [{ type: "text", text: roadmap }],
+      };
+    } catch {
+      return {
+        content: [{ type: "text", text: `Roadmap for ${business} not found.` }],
+      };
+    }
+  }
+);
+
 // Start the server with stdio transport
 async function main() {
   const transport = new StdioServerTransport();
