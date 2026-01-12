@@ -129,15 +129,21 @@ server.registerTool(
 
   },
   async ({ current_only }) => {
-    const experience = await readJsonFile<ExperienceData>("profile/experience.json");
+    const experience = await readJsonFile<Record<string, unknown>>("profile/experience.json");
 
-    let positions = experience.positions;
+    // Convert object format { "Company": {...} } to array format
+    const positions = Object.entries(experience).map(([company, data]) => ({
+      company,
+      ...(data as Record<string, unknown>),
+    }));
+
+    let filtered = positions;
     if (current_only) {
-      positions = positions.filter(p => p.end_date === "Present");
+      filtered = positions.filter(p => (p as { end_date?: string }).end_date === "Present");
     }
 
     return {
-      content: [{ type: "text", text: JSON.stringify(positions, null, 2) }],
+      content: [{ type: "text", text: JSON.stringify(filtered, null, 2) }],
     };
   }
 );
