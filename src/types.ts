@@ -104,6 +104,14 @@ export interface ContactData {
   links: Record<string, string>;
 }
 
+// About Me
+export interface AboutMeData {
+  personality_type: string;
+  hobbies: string[];
+  interests: string[];
+  life_situation: string[];
+}
+
 // Profile
 export interface ProfileResult {
   name: string;
@@ -112,6 +120,7 @@ export interface ProfileResult {
   location: string;
   links: Record<string, string>;
   summary: string;
+  about_me: AboutMeData;
 }
 
 // Resume Manifest

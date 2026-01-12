@@ -12,6 +12,7 @@ import type {
   GoalsData,
   GoalResult,
   ContactData,
+  AboutMeData,
   ProfileResult,
   ResumeManifest,
   JobOpportunitiesData,
@@ -230,12 +231,13 @@ server.registerTool(
   "get_profile",
   {
     title: "Get Profile Summary",
-    description: "Get a complete profile summary including contact info, summary, and key stats",
+    description: "Get a complete profile summary including contact info, about myself, summary, and key stats",
     outputSchema: textContentOutputSchema,
   },
   async () => {
     const contact = await readJsonFile<ContactData>("profile/contact.json");
     const resume = await readMarkdownFile("profile/resume.md");
+    const aboutMe = await readJsonFile<AboutMeData>("profile/about-me.json");
 
     // Extract summary from resume (between ## Summary and next ##)
     const summaryMatch = resume.match(/## Summary\n\n([\s\S]*?)(?=\n##|$)/);
@@ -248,6 +250,7 @@ server.registerTool(
       location: contact.location,
       links: contact.links,
       summary,
+      about_me: aboutMe,
     };
 
     return {
