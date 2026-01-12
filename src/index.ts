@@ -152,14 +152,19 @@ server.registerTool(
       completed: "projects/completed.json",
     };
 
-    let allProjects: ProjectResult[] = [];
+    let allProjects: Array<Record<string, unknown>> = [];
 
     const statusesToCheck = status ? [status] : ["active", "planned", "completed"];
 
     for (const s of statusesToCheck) {
       try {
-        const data = await readJsonFile<ProjectsData>(files[s]);
-        const projects = data.projects.map(p => ({ ...p, status: s }));
+        const data = await readJsonFile<Record<string, unknown>>(files[s]);
+        // Convert object format { "ProjectName": {...} } to array format
+        const projects = Object.entries(data).map(([name, projectData]) => ({
+          id: name,
+          ...(projectData as Record<string, unknown>),
+          status: s,
+        }));
         allProjects.push(...projects);
       } catch {
         // File may not exist
@@ -168,9 +173,10 @@ server.registerTool(
 
     if (tech) {
       const techLower = tech.toLowerCase();
-      allProjects = allProjects.filter(p =>
-        p.technologies.some(t => t.toLowerCase().includes(techLower))
-      );
+      allProjects = allProjects.filter(p => {
+        const technologies = p.technologies as string[] | undefined;
+        return technologies?.some(t => t.toLowerCase().includes(techLower));
+      });
     }
 
     return {
@@ -366,9 +372,10 @@ server.registerTool(
   },
   async ({ cluster, limit }) => {
     try {
-      const opportunities = await readJsonFile<JobOpportunitiesData>("job-applications/opportunities/latest.json");
+      const opportunities = await readJsonFile<Record<string, unknown>>("job-applications/opportunities/latest.json");
 
-      let jobs = opportunities.jobs || [];
+      // Use top_jobs array from the actual file structure
+      let jobs = (opportunities.top_jobs as Array<Record<string, unknown>>) || [];
 
       if (cluster) {
         jobs = jobs.filter(j => j.cluster === cluster);
