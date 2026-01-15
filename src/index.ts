@@ -697,6 +697,304 @@ server.registerTool(
   }
 );
 
+// Tool: Get Job Applications
+server.registerTool(
+  "get_job_applications",
+  {
+    title: "Get Job Applications",
+    description: "Get job applications tracking data with status, companies, and outcomes",
+    inputSchema: {
+      status: z.enum(["applied", "screening", "interviewing", "offer", "rejected", "withdrawn", "ghosted"]).optional().describe("Filter by application status"),
+      limit: z.number().optional().describe("Maximum number of applications to return"),
+    },
+    outputSchema: textContentOutputSchema,
+  },
+  async ({ status, limit }) => {
+    try {
+      const data = await readJsonFile<{ applications: Array<Record<string, unknown>> }>("job-applications/applications.json");
+      let applications = data.applications || [];
+
+      // Filter out template entries (empty id or company)
+      applications = applications.filter(app => app.id && app.company);
+
+      if (status) {
+        applications = applications.filter(app => app.status === status);
+      }
+
+      if (limit) {
+        applications = applications.slice(0, limit);
+      }
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(applications, null, 2) }],
+      };
+    } catch {
+      return {
+        content: [{ type: "text", text: "No job applications data found." }],
+      };
+    }
+  }
+);
+
+// Tool: Get Interviews
+server.registerTool(
+  "get_interviews",
+  {
+    title: "Get Interviews",
+    description: "Get interview tracking data including prep notes, questions asked, and outcomes",
+    inputSchema: {
+      company: z.string().optional().describe("Filter by company name"),
+      outcome: z.enum(["passed", "rejected", "pending", "unknown"]).optional().describe("Filter by interview outcome"),
+    },
+    outputSchema: textContentOutputSchema,
+  },
+  async ({ company, outcome }) => {
+    try {
+      const data = await readJsonFile<{ interviews: Array<Record<string, unknown>> }>("job-applications/interviews.json");
+      let interviews = data.interviews || [];
+
+      // Filter out template entries (empty id or company)
+      interviews = interviews.filter(int => int.id && int.company);
+
+      if (company) {
+        const companyLower = company.toLowerCase();
+        interviews = interviews.filter(int =>
+          (int.company as string)?.toLowerCase().includes(companyLower)
+        );
+      }
+
+      if (outcome) {
+        interviews = interviews.filter(int => int.outcome === outcome);
+      }
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(interviews, null, 2) }],
+      };
+    } catch {
+      return {
+        content: [{ type: "text", text: "No interview data found." }],
+      };
+    }
+  }
+);
+
+// Tool: Get Career Roadmap
+server.registerTool(
+  "get_career_roadmap",
+  {
+    title: "Get Career Roadmap",
+    description: "Get career roadmap with milestones, parallel tracks, success metrics, and risk mitigation",
+    inputSchema: {
+      section: z.enum(["milestones", "parallel_tracks", "success_metrics", "risk_mitigation", "all"]).optional().describe("Specific section to retrieve (defaults to all)"),
+      milestone_status: z.enum(["in_progress", "not_started", "completed"]).optional().describe("Filter milestones by status"),
+    },
+    outputSchema: textContentOutputSchema,
+  },
+  async ({ section, milestone_status }) => {
+    try {
+      const roadmap = await readJsonFile<Record<string, unknown>>("career/roadmap.json");
+      const careerRoadmap = roadmap.career_roadmap as Record<string, unknown>;
+
+      if (!section || section === "all") {
+        if (milestone_status) {
+          const milestones = (careerRoadmap.milestones as Array<Record<string, unknown>>) || [];
+          const filtered = milestones.filter(m => m.status === milestone_status);
+          return {
+            content: [{ type: "text", text: JSON.stringify({ ...careerRoadmap, milestones: filtered }, null, 2) }],
+          };
+        }
+        return {
+          content: [{ type: "text", text: JSON.stringify(careerRoadmap, null, 2) }],
+        };
+      }
+
+      const sectionData = careerRoadmap[section];
+      if (section === "milestones" && milestone_status) {
+        const milestones = (sectionData as Array<Record<string, unknown>>) || [];
+        const filtered = milestones.filter(m => m.status === milestone_status);
+        return {
+          content: [{ type: "text", text: JSON.stringify(filtered, null, 2) }],
+        };
+      }
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(sectionData, null, 2) }],
+      };
+    } catch {
+      return {
+        content: [{ type: "text", text: "Career roadmap not found." }],
+      };
+    }
+  }
+);
+
+// Tool: Get Chief Aim
+server.registerTool(
+  "get_chief_aim",
+  {
+    title: "Get Chief Aim",
+    description: "Get Napoleon Hill success principles framework including definite purpose, mastermind alliance, and career vision",
+    inputSchema: {
+      principle: z.string().optional().describe("Specific principle to retrieve (e.g., 'definiteness_of_purpose', 'master_mind_alliance', 'self_discipline'). Leave empty for all."),
+    },
+    outputSchema: textContentOutputSchema,
+  },
+  async ({ principle }) => {
+    try {
+      const chiefAim = await readJsonFile<Record<string, unknown>>("career/chief-aim.json");
+      const principles = chiefAim.napoleon_hill_principles as Record<string, unknown>;
+
+      if (principle) {
+        const data = principles[principle];
+        if (data) {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ [principle]: data }, null, 2) }],
+          };
+        }
+        // Also check career_vision_questions
+        if (principle === "career_vision_questions" && chiefAim.career_vision_questions) {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ career_vision_questions: chiefAim.career_vision_questions }, null, 2) }],
+          };
+        }
+        return {
+          content: [{ type: "text", text: `Principle '${principle}' not found. Available: ${Object.keys(principles).join(", ")}, career_vision_questions` }],
+        };
+      }
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(chiefAim, null, 2) }],
+      };
+    } catch {
+      return {
+        content: [{ type: "text", text: "Chief aim document not found." }],
+      };
+    }
+  }
+);
+
+// Tool: Get Financials
+server.registerTool(
+  "get_financials",
+  {
+    title: "Get Financials",
+    description: "Get financial data for Codaissance or TamperTantrum Labs including revenue, expenses, and milestones",
+    inputSchema: {
+      business: z.enum(["codaissance", "tampertantrum-labs"]).describe("Which business financials to get"),
+      section: z.enum(["revenue", "expenses", "metrics", "milestones", "all"]).optional().describe("Specific section (defaults to all)"),
+    },
+    outputSchema: textContentOutputSchema,
+  },
+  async ({ business, section }) => {
+    try {
+      const financials = await readJsonFile<Record<string, unknown>>(`business/${business}/financials.json`);
+
+      if (!section || section === "all") {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ business, ...financials }, null, 2) }],
+        };
+      }
+
+      return {
+        content: [{ type: "text", text: JSON.stringify({ business, [section]: financials[section] }, null, 2) }],
+      };
+    } catch {
+      return {
+        content: [{ type: "text", text: `Financials for ${business} not found.` }],
+      };
+    }
+  }
+);
+
+// Tool: Get LinkedIn Profile
+server.registerTool(
+  "get_linkedin_profile",
+  {
+    title: "Get LinkedIn Profile",
+    description: "Get LinkedIn profile data (not metrics) including headlines, bios, and follower counts",
+    inputSchema: {
+      account: z.enum(["personal", "codaissance", "tampertantrum_labs", "all"]).optional().describe("Which account profile to get (defaults to all)"),
+    },
+    outputSchema: textContentOutputSchema,
+  },
+  async ({ account }) => {
+    try {
+      const profile = await readJsonFile<Record<string, unknown>>("linkedin/profile.json");
+
+      if (account && account !== "all") {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ [account]: profile[account] }, null, 2) }],
+        };
+      }
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(profile, null, 2) }],
+      };
+    } catch {
+      return {
+        content: [{ type: "text", text: "LinkedIn profile data not found." }],
+      };
+    }
+  }
+);
+
+// Tool: Get Content Ideas
+server.registerTool(
+  "get_content_ideas",
+  {
+    title: "Get Content Ideas",
+    description: "Get LinkedIn content strategy including pillars, calendar, post structure, and content bank",
+    inputSchema: {
+      account: z.enum(["personal", "codaissance", "tampertantrum"]).optional().describe("Filter content ideas by account"),
+      section: z.enum(["pillars", "calendar", "post_structure", "content_bank", "all"]).optional().describe("Specific section (defaults to all)"),
+    },
+    outputSchema: textContentOutputSchema,
+  },
+  async ({ account, section }) => {
+    try {
+      const contentIdeas = await readJsonFile<Record<string, unknown>>("linkedin/content-ideas.json");
+
+      const result: Record<string, unknown> = {};
+
+      if (!section || section === "all") {
+        if (account) {
+          // Return account-specific data
+          const accounts = contentIdeas.accounts as Record<string, unknown>;
+          result.account_info = accounts[account];
+
+          const contentBank = contentIdeas.content_bank as Record<string, unknown>;
+          result.content_bank = contentBank[account];
+
+          result.post_structure = contentIdeas.post_structure;
+          result.calendar = contentIdeas.calendar;
+        } else {
+          return {
+            content: [{ type: "text", text: JSON.stringify(contentIdeas, null, 2) }],
+          };
+        }
+      } else {
+        if (section === "pillars" && account) {
+          const accounts = contentIdeas.accounts as Record<string, Record<string, unknown>>;
+          result.pillars = accounts[account]?.pillars;
+        } else if (section === "content_bank" && account) {
+          const contentBank = contentIdeas.content_bank as Record<string, unknown>;
+          result.content_bank = contentBank[account];
+        } else {
+          result[section] = contentIdeas[section];
+        }
+      }
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      };
+    } catch {
+      return {
+        content: [{ type: "text", text: "Content ideas data not found." }],
+      };
+    }
+  }
+);
+
 // Start the server with stdio transport
 async function main() {
   const transport = new StdioServerTransport();
