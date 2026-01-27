@@ -1787,6 +1787,482 @@ server.registerTool(
   }
 );
 
+// ===== UPDATE LINKEDIN PROFILE =====
+server.registerTool(
+  "update_linkedin_profile",
+  {
+    title: "Update LinkedIn Profile",
+    description: "Update LinkedIn profile data (personal, codaissance, or tampertantrum_labs account)",
+    inputSchema: {
+      account: z.enum(["personal", "codaissance", "tampertantrum_labs"]).describe("Which LinkedIn account to update"),
+      headline: z.string().optional().describe("Profile headline (personal only)"),
+      bio: z.string().optional().describe("Profile bio/about section (personal only)"),
+      tagline: z.string().optional().describe("Company tagline (company pages only)"),
+      description: z.string().optional().describe("Company description (company pages only)"),
+      followers: z.number().optional().describe("Current follower count"),
+      connections: z.number().optional().describe("Current connections count (personal only)"),
+      profile_views_last_90_days: z.number().optional().describe("Profile views in last 90 days (personal only)"),
+      search_appearances_last_week: z.number().optional().describe("Search appearances last week (personal only)"),
+      post_impressions_last_7_days: z.number().optional().describe("Post impressions last 7 days"),
+      engagement_rate: z.number().optional().describe("Engagement rate (company pages only)"),
+      open_to_work: z.boolean().optional().describe("Open to work status (personal only)"),
+      creator_mode: z.boolean().optional().describe("Creator mode enabled (personal only)"),
+    },
+  },
+  async ({
+    account,
+    headline,
+    bio,
+    tagline,
+    description,
+    followers,
+    connections,
+    profile_views_last_90_days,
+    search_appearances_last_week,
+    post_impressions_last_7_days,
+    engagement_rate,
+    open_to_work,
+    creator_mode,
+  }) => {
+    try {
+      const profile = await readJsonFile<Record<string, Record<string, unknown>>>("linkedin/profile.json");
+      const accountData = profile[account];
+
+      if (!accountData) {
+        return { content: [{ type: "text", text: `Account '${account}' not found in profile.json` }] };
+      }
+
+      const updates: string[] = [];
+
+      if (account === "personal") {
+        if (headline !== undefined) { accountData.headline = headline; updates.push("headline"); }
+        if (bio !== undefined) { accountData.bio = bio; updates.push("bio"); }
+        if (connections !== undefined) { accountData.connections = connections; updates.push("connections"); }
+        if (profile_views_last_90_days !== undefined) { accountData.profile_views_last_90_days = profile_views_last_90_days; updates.push("profile_views_last_90_days"); }
+        if (search_appearances_last_week !== undefined) { accountData.search_appearances_last_week = search_appearances_last_week; updates.push("search_appearances_last_week"); }
+        if (open_to_work !== undefined) { accountData.open_to_work = open_to_work; updates.push("open_to_work"); }
+        if (creator_mode !== undefined) { accountData.creator_mode = creator_mode; updates.push("creator_mode"); }
+      } else {
+        if (tagline !== undefined) { accountData.tagline = tagline; updates.push("tagline"); }
+        if (description !== undefined) { accountData.description = description; updates.push("description"); }
+        if (engagement_rate !== undefined) { accountData.engagement_rate = engagement_rate; updates.push("engagement_rate"); }
+      }
+
+      if (followers !== undefined) { accountData.followers = followers; updates.push("followers"); }
+      if (post_impressions_last_7_days !== undefined) { accountData.post_impressions_last_7_days = post_impressions_last_7_days; updates.push("post_impressions"); }
+
+      accountData.last_updated = new Date().toISOString().split("T")[0];
+
+      await writeJsonFile("linkedin/profile.json", profile, `Update LinkedIn ${account}: ${updates.join(", ")}`);
+
+      return {
+        content: [{ type: "text", text: `Updated LinkedIn ${account} profile: ${updates.join(", ")}` }],
+      };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Failed to update LinkedIn profile: ${error instanceof Error ? error.message : "Unknown error"}` }] };
+    }
+  }
+);
+
+// ===== SCAFFOLD PROJECT =====
+server.registerTool(
+  "scaffold_project",
+  {
+    title: "Scaffold Project",
+    description: "Create folder structure for a new project in projects/specs/{project_key}/ with README.md template",
+    inputSchema: {
+      project_key: z.string().describe("Project key/identifier (lowercase, hyphenated)"),
+      project_name: z.string().describe("Human-readable project name"),
+      project_type: z.string().describe("Project type (e.g., 'SaaS Web Application', 'CLI Tool')"),
+      tagline: z.string().optional().describe("One-sentence tagline"),
+      include_style_guide: z.boolean().optional().default(false).describe("Include style-guide.md"),
+      include_architecture: z.boolean().optional().default(false).describe("Include architecture.md"),
+    },
+  },
+  async ({ project_key, project_name, project_type, tagline, include_style_guide, include_architecture }) => {
+    try {
+      const createdFiles: string[] = [];
+      const today = new Date().toISOString().split("T")[0];
+
+      // Create README.md
+      const readmeContent = `# ${project_name}
+
+## Project Identity
+
+**Name**: ${project_name}
+**Type**: ${project_type}
+**Tagline**: ${tagline || "<!-- One sentence that captures the value -->"}
+
+---
+
+## The Problem
+
+**Problem Statement**:
+<!-- What specific pain exists? Who feels it? -->
+
+**Current Solutions**:
+<!-- What do people do today? Why is it inadequate? -->
+
+---
+
+## The Solution
+
+**Solution Statement**:
+<!-- How does this project solve the problem? -->
+
+**What This Is NOT**:
+<!-- Explicitly state what's out of scope. -->
+
+---
+
+## MVP Spec
+
+**MVP Goal**:
+<!-- What does the MVP prove? -->
+
+**MVP Features** (3-5 max):
+1.
+2.
+3.
+
+**MVP Technologies**:
+-
+
+---
+
+## Success Criteria
+
+**Success Milestone**:
+<!-- Specific, measurable outcome. -->
+
+---
+
+_Created: ${today}_
+`;
+
+      await writeToGitHub(`projects/specs/${project_key}/README.md`, readmeContent, `Scaffold project: ${project_name}`);
+      createdFiles.push("README.md");
+
+      if (include_style_guide) {
+        const styleGuideContent = `# ${project_name} - Style Guide
+
+## Brand Colors
+**Primary**:
+**Secondary**:
+
+## Typography
+**Headings**:
+**Body**:
+
+---
+_Created: ${today}_
+`;
+        await writeToGitHub(`projects/specs/${project_key}/style-guide.md`, styleGuideContent, `Add style guide: ${project_name}`);
+        createdFiles.push("style-guide.md");
+      }
+
+      if (include_architecture) {
+        const architectureContent = `# ${project_name} - Architecture
+
+## System Overview
+<!-- High-level architecture -->
+
+## Components
+### Frontend
+### Backend
+### Database
+
+---
+_Created: ${today}_
+`;
+        await writeToGitHub(`projects/specs/${project_key}/architecture.md`, architectureContent, `Add architecture doc: ${project_name}`);
+        createdFiles.push("architecture.md");
+      }
+
+      return {
+        content: [{ type: "text", text: `Created project scaffold at projects/specs/${project_key}/\nFiles: ${createdFiles.join(", ")}` }],
+      };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Failed to scaffold project: ${error instanceof Error ? error.message : "Unknown error"}` }] };
+    }
+  }
+);
+
+// ===== UPDATE GOAL PROGRESS =====
+server.registerTool(
+  "update_goal_progress",
+  {
+    title: "Update Goal Progress",
+    description: "Update progress on a 2026 goal by ID",
+    inputSchema: {
+      goal_id: z.string().describe("Goal ID (e.g., 'saas-launch', 'income-300k')"),
+      status: z.enum(["not_started", "in_progress", "completed", "blocked"]).optional().describe("Goal status"),
+      current_metric: z.string().optional().describe("Current metric value"),
+      notes: z.string().optional().describe("Progress notes"),
+    },
+  },
+  async ({ goal_id, status, current_metric, notes }) => {
+    try {
+      const goals = await readJsonFile<{
+        year: number;
+        last_updated: string;
+        categories: Record<string, {
+          title: string;
+          goals: Array<{
+            id: string;
+            goal: string;
+            status: string;
+            target_date: string;
+            metrics: { target: string; current: string };
+            notes?: string;
+          }>;
+        }>;
+      }>("profile/goals/2026-goals.json");
+
+      let found = false;
+      let goalName = "";
+
+      for (const category of Object.values(goals.categories)) {
+        for (const goal of category.goals) {
+          if (goal.id === goal_id) {
+            found = true;
+            goalName = goal.goal;
+            if (status) goal.status = status;
+            if (current_metric) goal.metrics.current = current_metric;
+            if (notes) goal.notes = notes;
+            break;
+          }
+        }
+        if (found) break;
+      }
+
+      if (!found) {
+        return { content: [{ type: "text", text: `Goal with ID '${goal_id}' not found` }] };
+      }
+
+      goals.last_updated = new Date().toISOString().split("T")[0];
+      await writeJsonFile("profile/goals/2026-goals.json", goals, `Update goal progress: ${goal_id}`);
+
+      const updates = [];
+      if (status) updates.push(`status: ${status}`);
+      if (current_metric) updates.push(`current: ${current_metric}`);
+      if (notes) updates.push("notes updated");
+
+      return {
+        content: [{ type: "text", text: `Updated goal '${goalName}': ${updates.join(", ")}` }],
+      };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Failed to update goal progress: ${error instanceof Error ? error.message : "Unknown error"}` }] };
+    }
+  }
+);
+
+// ===== ADD MASTERMIND MEMBER =====
+server.registerTool(
+  "add_mastermind_member",
+  {
+    title: "Add Mastermind Member",
+    description: "Add a member to the mastermind alliance",
+    inputSchema: {
+      name: z.string().describe("Member name"),
+      description: z.string().describe("Member description including role and what they provide"),
+      list: z.enum(["current", "needed"]).default("current").describe("Add to current_members or needed_members"),
+    },
+  },
+  async ({ name, description, list }) => {
+    try {
+      const chiefAim = await readJsonFile<{
+        napoleon_hill_principles: {
+          master_mind_alliance: {
+            current_members: string[];
+            needed_members: string[];
+          };
+        };
+      }>("career/chief-aim.json");
+
+      const mastermind = chiefAim.napoleon_hill_principles.master_mind_alliance;
+      const memberEntry = `${name} - ${description}`;
+
+      if (list === "current") {
+        mastermind.current_members.push(memberEntry);
+      } else {
+        mastermind.needed_members.push(memberEntry);
+      }
+
+      await writeJsonFile("career/chief-aim.json", chiefAim, `Add mastermind member: ${name}`);
+
+      return {
+        content: [{ type: "text", text: `Added '${name}' to mastermind ${list}_members list` }],
+      };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Failed to add mastermind member: ${error instanceof Error ? error.message : "Unknown error"}` }] };
+    }
+  }
+);
+
+// ===== LOG WEEKLY ACTION =====
+server.registerTool(
+  "log_weekly_action",
+  {
+    title: "Log Weekly Action",
+    description: "Log a weekly action item for tracking consistent effort",
+    inputSchema: {
+      action: z.string().describe("Description of the action taken"),
+      category: z.enum(["business", "learning", "networking", "health", "family", "career"]).describe("Action category"),
+      principle: z.string().optional().describe("Napoleon Hill principle this relates to"),
+      impact: z.string().optional().describe("Impact or result of the action"),
+    },
+  },
+  async ({ action, category, principle, impact }) => {
+    try {
+      let weeklyActions: {
+        weeks: Array<{
+          week_start: string;
+          actions: Array<{
+            date: string;
+            action: string;
+            category: string;
+            principle?: string;
+            impact?: string;
+          }>;
+        }>;
+      };
+
+      try {
+        weeklyActions = await readJsonFile("career/weekly-actions.json");
+      } catch {
+        weeklyActions = { weeks: [] };
+      }
+
+      const today = new Date();
+      const weekStart = new Date(today);
+      weekStart.setDate(today.getDate() - today.getDay());
+      const weekStartStr = weekStart.toISOString().split("T")[0];
+
+      let currentWeek = weeklyActions.weeks.find(w => w.week_start === weekStartStr);
+      if (!currentWeek) {
+        currentWeek = { week_start: weekStartStr, actions: [] };
+        weeklyActions.weeks.unshift(currentWeek);
+      }
+
+      currentWeek.actions.push({
+        date: today.toISOString().split("T")[0],
+        action,
+        category,
+        principle: principle || undefined,
+        impact: impact || undefined,
+      });
+
+      await writeJsonFile("career/weekly-actions.json", weeklyActions, `Log weekly action: ${category}`);
+
+      return {
+        content: [{ type: "text", text: `Logged weekly action: "${action}" (${category})` }],
+      };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Failed to log weekly action: ${error instanceof Error ? error.message : "Unknown error"}` }] };
+    }
+  }
+);
+
+// ===== UPDATE CHIEF AIM =====
+server.registerTool(
+  "update_chief_aim",
+  {
+    title: "Update Chief Aim",
+    description: "Update Napoleon Hill principle content or career vision",
+    inputSchema: {
+      section: z.enum(["definiteness_of_purpose", "applied_faith", "going_extra_mile", "career_vision_questions"]).describe("Section to update"),
+      field: z.string().describe("Field name to update"),
+      value: z.union([z.string(), z.array(z.string())]).describe("New value (string or array)"),
+    },
+  },
+  async ({ section, field, value }) => {
+    try {
+      const chiefAim = await readJsonFile<Record<string, unknown>>("career/chief-aim.json");
+
+      if (section === "career_vision_questions") {
+        const careerVision = chiefAim.career_vision_questions as Record<string, unknown>;
+        if (careerVision) {
+          careerVision[field] = value;
+        }
+      } else {
+        const principles = chiefAim.napoleon_hill_principles as Record<string, Record<string, unknown>>;
+        if (principles && principles[section]) {
+          principles[section][field] = value;
+          if (section === "definiteness_of_purpose") {
+            principles[section].last_reviewed = new Date().toISOString().split("T")[0];
+          }
+        }
+      }
+
+      await writeJsonFile("career/chief-aim.json", chiefAim, `Update chief aim: ${section}.${field}`);
+
+      return {
+        content: [{ type: "text", text: `Updated chief-aim.json: ${section}.${field}` }],
+      };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Failed to update chief aim: ${error instanceof Error ? error.message : "Unknown error"}` }] };
+    }
+  }
+);
+
+// ===== UPDATE APPLICATION STATUS =====
+server.registerTool(
+  "update_application_status",
+  {
+    title: "Update Application Status",
+    description: "Update the status of an existing job application",
+    inputSchema: {
+      company: z.string().describe("Company name to find the application"),
+      status: z.enum(["applied", "screening", "interviewing", "offer", "rejected", "withdrawn", "ghosted"]).describe("New status"),
+      notes: z.string().optional().describe("Additional notes"),
+      follow_up_date: z.string().optional().describe("Next follow-up date (YYYY-MM-DD)"),
+      outcome: z.string().optional().describe("Final outcome"),
+    },
+  },
+  async ({ company, status, notes, follow_up_date, outcome }) => {
+    try {
+      const applications = await readJsonFile<{
+        applications: Array<{
+          company: string;
+          role: string;
+          status: string;
+          notes: string;
+          follow_up_date: string | null;
+          outcome: string | null;
+          last_updated: string;
+        }>;
+      }>("job-applications/applications.json");
+
+      const app = applications.applications.find(
+        a => a.company.toLowerCase().includes(company.toLowerCase())
+      );
+
+      if (!app) {
+        return { content: [{ type: "text", text: `No application found for company matching '${company}'` }] };
+      }
+
+      const previousStatus = app.status;
+      app.status = status;
+      app.last_updated = new Date().toISOString().split("T")[0];
+
+      if (notes) {
+        app.notes = app.notes ? `${app.notes}\n\n[${app.last_updated}] ${notes}` : notes;
+      }
+      if (follow_up_date) app.follow_up_date = follow_up_date;
+      if (outcome) app.outcome = outcome;
+
+      await writeJsonFile("job-applications/applications.json", applications, `Update application: ${app.company} -> ${status}`);
+
+      return {
+        content: [{ type: "text", text: `Updated ${app.company} (${app.role}): ${previousStatus} → ${status}` }],
+      };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Failed to update application status: ${error instanceof Error ? error.message : "Unknown error"}` }] };
+    }
+  }
+);
+
 // HTTP Server for Vercel/remote deployment
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 
