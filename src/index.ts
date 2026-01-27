@@ -41,6 +41,13 @@ async function readMarkdownFile(relativePath: string): Promise<string> {
   return await fs.readFile(fullPath, "utf-8");
 }
 
+// Helper to write JSON files to the repo
+async function writeJsonFile(relativePath: string, data: unknown): Promise<void> {
+  const fullPath = path.join(REPO_ROOT, relativePath);
+  const content = JSON.stringify(data, null, 2) + "\n";
+  await fs.writeFile(fullPath, content, "utf-8");
+}
+
 // Common output schema for all tools (MCP text content format)
 const textContentOutputSchema = z.object({
   content: z.array(
@@ -990,6 +997,710 @@ server.registerTool(
     } catch {
       return {
         content: [{ type: "text", text: "Content ideas data not found." }],
+      };
+    }
+  }
+);
+
+// ============================================================
+// UPDATE TOOLS - Write operations for the knowledge base
+// ============================================================
+
+// Tool: Update Skill
+server.registerTool(
+  "update_skill",
+  {
+    title: "Update Skill",
+    description: "Update a skill's proficiency level",
+    inputSchema: {
+      category: z.string().describe("Skill category (e.g., 'programming_languages', 'frameworks_and_libraries')"),
+      skill_name: z.string().describe("Name of the skill to update"),
+      new_level: z.enum(["none", "novice", "apprentice", "adept", "expert", "master"]).describe("New proficiency level"),
+    },
+    outputSchema: textContentOutputSchema,
+  },
+  async ({ category, skill_name, new_level }) => {
+    try {
+      const skills = await readJsonFile<Record<string, Record<string, string>>>("profile/skills.json");
+
+      if (!skills[category]) {
+        return {
+          content: [{ type: "text", text: `Category '${category}' not found. Available: ${Object.keys(skills).filter(k => k !== "skill_levels").join(", ")}` }],
+        };
+      }
+
+      const oldLevel = skills[category][skill_name];
+      skills[category][skill_name] = new_level;
+
+      await writeJsonFile("profile/skills.json", skills);
+
+      return {
+        content: [{ type: "text", text: `Updated skill '${skill_name}' in '${category}': ${oldLevel || "new"} → ${new_level}` }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Failed to update skill: ${error}` }],
+      };
+    }
+  }
+);
+
+// Tool: Add Experience
+server.registerTool(
+  "add_experience",
+  {
+    title: "Add Experience",
+    description: "Add a new work experience entry",
+    inputSchema: {
+      company: z.string().describe("Company name"),
+      title: z.string().describe("Job title"),
+      start_date: z.string().describe("Start date (YYYY-MM-DD)"),
+      end_date: z.string().optional().describe("End date (YYYY-MM-DD or 'Present')"),
+      description: z.string().describe("Role description"),
+      responsibilities: z.array(z.string()).optional().describe("List of responsibilities"),
+      technologies: z.array(z.string()).optional().describe("Technologies used"),
+    },
+    outputSchema: textContentOutputSchema,
+  },
+  async ({ company, title, start_date, end_date, description, responsibilities, technologies }) => {
+    try {
+      const experience = await readJsonFile<Record<string, unknown>>("profile/experience.json");
+
+      experience[company] = {
+        title,
+        start_date,
+        end_date: end_date || "Present",
+        description,
+        responsibilities: responsibilities || [],
+        technologies: technologies || [],
+      };
+
+      await writeJsonFile("profile/experience.json", experience);
+
+      return {
+        content: [{ type: "text", text: `Added experience: ${title} at ${company}` }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Failed to add experience: ${error}` }],
+      };
+    }
+  }
+);
+
+// Tool: Add Certification
+server.registerTool(
+  "add_certification",
+  {
+    title: "Add Certification",
+    description: "Add a new certification to education profile",
+    inputSchema: {
+      name: z.string().describe("Certification name"),
+      issuer: z.string().describe("Issuing organization"),
+      date_earned: z.string().describe("Date earned (YYYY-MM-DD)"),
+      expiration_date: z.string().optional().describe("Expiration date if applicable"),
+      credential_id: z.string().optional().describe("Credential ID"),
+      url: z.string().optional().describe("Verification URL"),
+    },
+    outputSchema: textContentOutputSchema,
+  },
+  async ({ name, issuer, date_earned, expiration_date, credential_id, url }) => {
+    try {
+      const education = await readJsonFile<Record<string, unknown>>("profile/education.json");
+
+      if (!education.certifications) {
+        education.certifications = [];
+      }
+
+      const certifications = education.certifications as Array<Record<string, unknown>>;
+      certifications.push({
+        name,
+        issuer,
+        date_earned,
+        expiration_date: expiration_date || null,
+        credential_id: credential_id || null,
+        url: url || null,
+      });
+
+      await writeJsonFile("profile/education.json", education);
+
+      return {
+        content: [{ type: "text", text: `Added certification: ${name} from ${issuer}` }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Failed to add certification: ${error}` }],
+      };
+    }
+  }
+);
+
+// Tool: Update Project Status
+server.registerTool(
+  "update_project_status",
+  {
+    title: "Update Project Status",
+    description: "Update a project's status or move it between active/planned/completed",
+    inputSchema: {
+      project_id: z.string().describe("Project identifier (key in the JSON file)"),
+      current_status: z.enum(["active", "planned", "completed"]).describe("Current status file where project is located"),
+      new_status: z.enum(["active", "planned", "completed"]).describe("New status to move project to"),
+      completion_percentage: z.number().optional().describe("Update completion percentage (0-100)"),
+      notes: z.string().optional().describe("Add status notes"),
+    },
+    outputSchema: textContentOutputSchema,
+  },
+  async ({ project_id, current_status, new_status, completion_percentage, notes }) => {
+    try {
+      const files: Record<string, string> = {
+        active: "projects/active.json",
+        planned: "projects/planned.json",
+        completed: "projects/completed.json",
+      };
+
+      const sourceData = await readJsonFile<Record<string, Record<string, unknown>>>(files[current_status]);
+
+      if (!sourceData[project_id]) {
+        return {
+          content: [{ type: "text", text: `Project '${project_id}' not found in ${current_status} projects.` }],
+        };
+      }
+
+      const project = sourceData[project_id];
+
+      if (completion_percentage !== undefined) {
+        project.completion = completion_percentage;
+      }
+
+      if (notes) {
+        project.status_notes = notes;
+      }
+
+      if (current_status !== new_status) {
+        delete sourceData[project_id];
+        await writeJsonFile(files[current_status], sourceData);
+
+        const destData = await readJsonFile<Record<string, Record<string, unknown>>>(files[new_status]);
+        destData[project_id] = project;
+        await writeJsonFile(files[new_status], destData);
+
+        return {
+          content: [{ type: "text", text: `Moved project '${project_id}' from ${current_status} to ${new_status}` }],
+        };
+      } else {
+        await writeJsonFile(files[current_status], sourceData);
+        return {
+          content: [{ type: "text", text: `Updated project '${project_id}' in ${current_status}` }],
+        };
+      }
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Failed to update project: ${error}` }],
+      };
+    }
+  }
+);
+
+// Tool: Add Project
+server.registerTool(
+  "add_project",
+  {
+    title: "Add Project",
+    description: "Add a new project to the planned projects list",
+    inputSchema: {
+      id: z.string().describe("Project identifier (will be key in JSON)"),
+      name: z.string().describe("Project display name"),
+      description: z.string().describe("Project description"),
+      type: z.enum(["saas", "open_source", "consulting", "internal_tool", "side_project"]).describe("Project type"),
+      technologies: z.array(z.string()).describe("Technologies to be used"),
+      monetization_strategy: z.string().optional().describe("How this project will make money"),
+      target_audience: z.string().optional().describe("Who this project is for"),
+      priority: z.enum(["low", "medium", "high"]).optional().describe("Project priority"),
+    },
+    outputSchema: textContentOutputSchema,
+  },
+  async ({ id, name, description, type, technologies, monetization_strategy, target_audience, priority }) => {
+    try {
+      const planned = await readJsonFile<Record<string, unknown>>("projects/planned.json");
+
+      if (planned[id]) {
+        return {
+          content: [{ type: "text", text: `Project '${id}' already exists in planned projects.` }],
+        };
+      }
+
+      planned[id] = {
+        name,
+        description,
+        type,
+        technologies,
+        monetization_strategy: monetization_strategy || "TBD",
+        target_audience: target_audience || "TBD",
+        priority: priority || "medium",
+        status: "planned",
+        created_date: new Date().toISOString().split("T")[0],
+      };
+
+      await writeJsonFile("projects/planned.json", planned);
+
+      return {
+        content: [{ type: "text", text: `Added new project: ${name} (${id})` }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Failed to add project: ${error}` }],
+      };
+    }
+  }
+);
+
+// Tool: Log Job Application
+server.registerTool(
+  "log_job_application",
+  {
+    title: "Log Job Application",
+    description: "Log a new job application",
+    inputSchema: {
+      company: z.string().describe("Company name"),
+      role: z.string().describe("Job title/role"),
+      url: z.string().optional().describe("Job posting URL"),
+      salary_range: z.string().optional().describe("Salary range if known"),
+      status: z.enum(["applied", "screening", "interviewing", "offer", "rejected", "withdrawn", "ghosted"]).optional().describe("Application status (default: applied)"),
+      resume_variant: z.string().optional().describe("Which resume variant was used"),
+      notes: z.string().optional().describe("Additional notes"),
+    },
+    outputSchema: textContentOutputSchema,
+  },
+  async ({ company, role, url, salary_range, status, resume_variant, notes }) => {
+    try {
+      const data = await readJsonFile<{ applications: Array<Record<string, unknown>> }>("job-applications/applications.json");
+
+      const newId = `app-${Date.now()}`;
+      const application = {
+        id: newId,
+        company,
+        role,
+        url: url || null,
+        salary_range: salary_range || null,
+        status: status || "applied",
+        resume_variant: resume_variant || null,
+        notes: notes || null,
+        applied_date: new Date().toISOString().split("T")[0],
+        last_updated: new Date().toISOString().split("T")[0],
+      };
+
+      data.applications.push(application);
+
+      await writeJsonFile("job-applications/applications.json", data);
+
+      return {
+        content: [{ type: "text", text: `Logged application: ${role} at ${company} (ID: ${newId})` }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Failed to log application: ${error}` }],
+      };
+    }
+  }
+);
+
+// Tool: Log Interview
+server.registerTool(
+  "log_interview",
+  {
+    title: "Log Interview",
+    description: "Log a job interview with prep notes and questions",
+    inputSchema: {
+      application_id: z.string().describe("Associated job application ID"),
+      company: z.string().describe("Company name"),
+      interview_type: z.enum(["phone_screen", "technical", "behavioral", "system_design", "final_round", "other"]).describe("Type of interview"),
+      date: z.string().describe("Interview date (YYYY-MM-DD)"),
+      interviewer: z.string().optional().describe("Interviewer name/role"),
+      questions_asked: z.array(z.string()).optional().describe("Questions that were asked"),
+      prep_notes: z.string().optional().describe("Preparation notes"),
+      outcome: z.enum(["passed", "rejected", "pending", "unknown"]).optional().describe("Interview outcome"),
+      feedback: z.string().optional().describe("Feedback received"),
+    },
+    outputSchema: textContentOutputSchema,
+  },
+  async ({ application_id, company, interview_type, date, interviewer, questions_asked, prep_notes, outcome, feedback }) => {
+    try {
+      const data = await readJsonFile<{ interviews: Array<Record<string, unknown>> }>("job-applications/interviews.json");
+
+      const newId = `int-${Date.now()}`;
+      const interview = {
+        id: newId,
+        application_id,
+        company,
+        interview_type,
+        date,
+        interviewer: interviewer || null,
+        questions_asked: questions_asked || [],
+        prep_notes: prep_notes || null,
+        outcome: outcome || "pending",
+        feedback: feedback || null,
+        logged_date: new Date().toISOString().split("T")[0],
+      };
+
+      data.interviews.push(interview);
+
+      await writeJsonFile("job-applications/interviews.json", data);
+
+      return {
+        content: [{ type: "text", text: `Logged interview: ${interview_type} at ${company} (ID: ${newId})` }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Failed to log interview: ${error}` }],
+      };
+    }
+  }
+);
+
+// Tool: Update Financials
+server.registerTool(
+  "update_financials",
+  {
+    title: "Update Financials",
+    description: "Update financial data for a business (revenue, expenses, metrics)",
+    inputSchema: {
+      business: z.enum(["codaissance", "tampertantrum-labs"]).describe("Which business to update"),
+      mrr: z.number().optional().describe("Update Monthly Recurring Revenue"),
+      arr: z.number().optional().describe("Update Annual Recurring Revenue"),
+      total_revenue: z.number().optional().describe("Update total revenue"),
+      customers: z.number().optional().describe("Update customer count"),
+      free_users: z.number().optional().describe("Update free user count"),
+      monthly_expense: z.object({
+        name: z.string(),
+        cost: z.number(),
+        purpose: z.string(),
+      }).optional().describe("Add a monthly recurring expense"),
+      one_time_expense: z.object({
+        name: z.string(),
+        cost: z.number(),
+        date: z.string(),
+        purpose: z.string(),
+      }).optional().describe("Add a one-time expense"),
+    },
+    outputSchema: textContentOutputSchema,
+  },
+  async ({ business, mrr, arr, total_revenue, customers, free_users, monthly_expense, one_time_expense }) => {
+    try {
+      const financials = await readJsonFile<Record<string, unknown>>(`business/${business}/financials.json`);
+      const updates: string[] = [];
+
+      if (mrr !== undefined) {
+        (financials.revenue as Record<string, unknown>).mrr = mrr;
+        updates.push(`MRR: $${mrr}`);
+      }
+
+      if (arr !== undefined) {
+        (financials.revenue as Record<string, unknown>).arr = arr;
+        updates.push(`ARR: $${arr}`);
+      }
+
+      if (total_revenue !== undefined) {
+        (financials.revenue as Record<string, unknown>).total_revenue = total_revenue;
+        updates.push(`Total Revenue: $${total_revenue}`);
+      }
+
+      if (customers !== undefined) {
+        (financials.metrics as Record<string, unknown>).customers = customers;
+        updates.push(`Customers: ${customers}`);
+      }
+
+      if (free_users !== undefined) {
+        (financials.metrics as Record<string, unknown>).free_users = free_users;
+        updates.push(`Free Users: ${free_users}`);
+      }
+
+      if (monthly_expense) {
+        const expenses = financials.expenses as Record<string, unknown>;
+        const monthly = (expenses.monthly_recurring || []) as Array<Record<string, unknown>>;
+        monthly.push({ ...monthly_expense, status: "active" });
+        expenses.monthly_recurring = monthly;
+        expenses.total_monthly = monthly.reduce((sum, e) => sum + (e.cost as number), 0);
+        updates.push(`Added monthly expense: ${monthly_expense.name} ($${monthly_expense.cost})`);
+      }
+
+      if (one_time_expense) {
+        const expenses = financials.expenses as Record<string, unknown>;
+        const oneTime = (expenses.one_time || []) as Array<Record<string, unknown>>;
+        oneTime.push(one_time_expense);
+        expenses.one_time = oneTime;
+        updates.push(`Added one-time expense: ${one_time_expense.name} ($${one_time_expense.cost})`);
+      }
+
+      await writeJsonFile(`business/${business}/financials.json`, financials);
+
+      return {
+        content: [{ type: "text", text: `Updated ${business} financials:\n${updates.join("\n")}` }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Failed to update financials: ${error}` }],
+      };
+    }
+  }
+);
+
+// Tool: Update LinkedIn Metrics
+server.registerTool(
+  "update_linkedin_metrics",
+  {
+    title: "Update LinkedIn Metrics",
+    description: "Update LinkedIn metrics for an account",
+    inputSchema: {
+      account: z.enum(["personal", "codaissance", "tampertantrum"]).describe("Which account to update"),
+      followers: z.number().optional().describe("Update follower count"),
+      connections: z.number().optional().describe("Update connection count (personal only)"),
+      profile_views: z.number().optional().describe("Update profile views (last 90 days)"),
+      post_impressions: z.number().optional().describe("Update post impressions"),
+      engagement_rate: z.number().optional().describe("Update engagement rate (as percentage)"),
+    },
+    outputSchema: textContentOutputSchema,
+  },
+  async ({ account, followers, connections, profile_views, post_impressions, engagement_rate }) => {
+    try {
+      const files: Record<string, string> = {
+        personal: "linkedin/personal-metrics.json",
+        codaissance: "linkedin/codaissance-metrics.json",
+        tampertantrum: "linkedin/tampertantrum-metrics.json",
+      };
+
+      const metrics = await readJsonFile<Record<string, unknown>>(files[account]);
+      const updates: string[] = [];
+      const today = new Date().toISOString().split("T")[0];
+
+      if (followers !== undefined) {
+        metrics.followers = followers;
+        updates.push(`Followers: ${followers}`);
+      }
+
+      if (connections !== undefined && account === "personal") {
+        metrics.connections = connections;
+        updates.push(`Connections: ${connections}`);
+      }
+
+      if (profile_views !== undefined) {
+        metrics.profile_views_90d = profile_views;
+        updates.push(`Profile Views (90d): ${profile_views}`);
+      }
+
+      if (post_impressions !== undefined) {
+        metrics.post_impressions = post_impressions;
+        updates.push(`Post Impressions: ${post_impressions}`);
+      }
+
+      if (engagement_rate !== undefined) {
+        metrics.engagement_rate = engagement_rate;
+        updates.push(`Engagement Rate: ${engagement_rate}%`);
+      }
+
+      metrics.last_updated = today;
+
+      await writeJsonFile(files[account], metrics);
+
+      return {
+        content: [{ type: "text", text: `Updated ${account} LinkedIn metrics:\n${updates.join("\n")}` }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Failed to update metrics: ${error}` }],
+      };
+    }
+  }
+);
+
+// Tool: Add Idea
+server.registerTool(
+  "add_idea",
+  {
+    title: "Add Idea",
+    description: "Add a new idea to the idea bank",
+    inputSchema: {
+      source: z.enum(["personal", "codaissance", "tampertantrum-labs"]).describe("Which idea bank to add to"),
+      title: z.string().describe("Idea title"),
+      description: z.string().describe("Idea description"),
+      problem: z.string().optional().describe("Problem this solves"),
+      target_audience: z.string().optional().describe("Who this is for"),
+      potential_revenue: z.string().optional().describe("Revenue potential estimate"),
+      complexity: z.enum(["low", "medium", "high"]).optional().describe("Implementation complexity"),
+      tags: z.array(z.string()).optional().describe("Tags/categories"),
+    },
+    outputSchema: textContentOutputSchema,
+  },
+  async ({ source, title, description, problem, target_audience, potential_revenue, complexity, tags }) => {
+    try {
+      const paths: Record<string, string> = {
+        personal: "ideas/personal/ideas.json",
+        codaissance: "ideas/business/codaissance/ideas.json",
+        "tampertantrum-labs": "ideas/business/tampertantrum-labs/ideas.json",
+      };
+
+      const data = await readJsonFile<{ ideas: Array<Record<string, unknown>> }>(paths[source]);
+
+      const newId = `idea-${Date.now()}`;
+      const idea = {
+        id: newId,
+        title,
+        description,
+        problem: problem || null,
+        target_audience: target_audience || null,
+        potential_revenue: potential_revenue || null,
+        complexity: complexity || "medium",
+        tags: tags || [],
+        status: "raw",
+        created_date: new Date().toISOString().split("T")[0],
+      };
+
+      data.ideas.push(idea);
+
+      await writeJsonFile(paths[source], data);
+
+      return {
+        content: [{ type: "text", text: `Added idea to ${source}: ${title} (ID: ${newId})` }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Failed to add idea: ${error}` }],
+      };
+    }
+  }
+);
+
+// Tool: Update Milestone
+server.registerTool(
+  "update_milestone",
+  {
+    title: "Update Milestone",
+    description: "Update a career roadmap milestone's status or completion percentage",
+    inputSchema: {
+      milestone_id: z.string().describe("Milestone ID (e.g., 'm1', 'm2')"),
+      status: z.enum(["in_progress", "not_started", "completed"]).optional().describe("New status"),
+      completion: z.number().optional().describe("Completion percentage (0-100)"),
+      notes: z.string().optional().describe("Add notes about progress"),
+    },
+    outputSchema: textContentOutputSchema,
+  },
+  async ({ milestone_id, status, completion, notes }) => {
+    try {
+      const roadmap = await readJsonFile<{ career_roadmap: { milestones: Array<Record<string, unknown>>; last_updated?: string; [key: string]: unknown } }>("career/roadmap.json");
+      const milestones = roadmap.career_roadmap.milestones;
+
+      const milestone = milestones.find(m => m.id === milestone_id);
+      if (!milestone) {
+        return {
+          content: [{ type: "text", text: `Milestone '${milestone_id}' not found. Available: ${milestones.map(m => m.id).join(", ")}` }],
+        };
+      }
+
+      const updates: string[] = [];
+
+      if (status !== undefined) {
+        milestone.status = status;
+        updates.push(`Status: ${status}`);
+      }
+
+      if (completion !== undefined) {
+        milestone.completion = completion;
+        updates.push(`Completion: ${completion}%`);
+      }
+
+      if (notes) {
+        milestone.progress_notes = notes;
+        updates.push(`Notes: ${notes}`);
+      }
+
+      roadmap.career_roadmap.last_updated = new Date().toISOString().split("T")[0];
+
+      await writeJsonFile("career/roadmap.json", roadmap);
+
+      return {
+        content: [{ type: "text", text: `Updated milestone ${milestone_id} (${milestone.title}):\n${updates.join("\n")}` }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Failed to update milestone: ${error}` }],
+      };
+    }
+  }
+);
+
+// Tool: Update Learning Progress
+server.registerTool(
+  "update_learning_progress",
+  {
+    title: "Update Learning Progress",
+    description: "Update learning progress or mark items as completed",
+    inputSchema: {
+      skill_name: z.string().describe("Name of the skill/topic being learned"),
+      action: z.enum(["update_progress", "mark_completed", "add_to_queue"]).describe("What action to take"),
+      progress_percentage: z.number().optional().describe("Update progress percentage (for update_progress)"),
+      completion_notes: z.string().optional().describe("Notes on completion (for mark_completed)"),
+      resource_url: z.string().optional().describe("Resource URL (for add_to_queue)"),
+      priority: z.enum(["low", "medium", "high"]).optional().describe("Priority (for add_to_queue)"),
+    },
+    outputSchema: textContentOutputSchema,
+  },
+  async ({ skill_name, action, progress_percentage, completion_notes, resource_url, priority }) => {
+    try {
+      if (action === "mark_completed") {
+        const completed = await readJsonFile<{ entries: Array<Record<string, unknown>> }>("learning/completed.json");
+
+        completed.entries.push({
+          skill: skill_name,
+          completed_date: new Date().toISOString().split("T")[0],
+          notes: completion_notes || null,
+        });
+
+        await writeJsonFile("learning/completed.json", completed);
+
+        return {
+          content: [{ type: "text", text: `Marked '${skill_name}' as completed in learning log` }],
+        };
+      }
+
+      const roadmap = await readJsonFile<Record<string, unknown>>("learning/roadmap.json");
+
+      if (action === "update_progress") {
+        const currentFocus = roadmap.current_focus as Array<Record<string, unknown>>;
+        const item = currentFocus.find(i => (i.skill as string)?.toLowerCase().includes(skill_name.toLowerCase()));
+
+        if (item && progress_percentage !== undefined) {
+          item.progress = progress_percentage;
+          item.last_updated = new Date().toISOString().split("T")[0];
+          await writeJsonFile("learning/roadmap.json", roadmap);
+          return {
+            content: [{ type: "text", text: `Updated '${skill_name}' progress to ${progress_percentage}%` }],
+          };
+        }
+        return {
+          content: [{ type: "text", text: `Skill '${skill_name}' not found in current focus` }],
+        };
+      }
+
+      if (action === "add_to_queue") {
+        const queue = (roadmap.queue || []) as Array<Record<string, unknown>>;
+        queue.push({
+          skill: skill_name,
+          resource_url: resource_url || null,
+          priority: priority || "medium",
+          added_date: new Date().toISOString().split("T")[0],
+        });
+        roadmap.queue = queue;
+        await writeJsonFile("learning/roadmap.json", roadmap);
+        return {
+          content: [{ type: "text", text: `Added '${skill_name}' to learning queue` }],
+        };
+      }
+
+      return {
+        content: [{ type: "text", text: "Invalid action specified" }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Failed to update learning progress: ${error}` }],
       };
     }
   }

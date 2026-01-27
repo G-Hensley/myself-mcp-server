@@ -64,6 +64,74 @@ async function readMarkdownFile(relativePath: string): Promise<string> {
   return fetchFromGitHub(relativePath);
 }
 
+// Helper to get file SHA (required for updates via GitHub API)
+async function getFileSha(relativePath: string): Promise<string> {
+  const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${relativePath}?ref=${GITHUB_BRANCH}`;
+  const headers: Record<string, string> = {
+    "Accept": "application/vnd.github.v3+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "User-Agent": "myself-mcp-server",
+  };
+
+  if (GITHUB_TOKEN) {
+    headers["Authorization"] = `Bearer ${GITHUB_TOKEN}`;
+  }
+
+  const response = await fetch(url, { headers });
+  if (!response.ok) {
+    throw new Error(`Failed to get SHA for ${relativePath}: ${response.status}`);
+  }
+  const data = await response.json() as { sha: string };
+  return data.sha;
+}
+
+// Helper to write files to GitHub via Contents API
+async function writeToGitHub(relativePath: string, content: string, message: string): Promise<void> {
+  if (!GITHUB_TOKEN) {
+    throw new Error("GITHUB_TOKEN not configured - cannot write to repository");
+  }
+
+  const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${relativePath}`;
+  const headers: Record<string, string> = {
+    "Accept": "application/vnd.github.v3+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "User-Agent": "myself-mcp-server",
+    "Authorization": `Bearer ${GITHUB_TOKEN}`,
+    "Content-Type": "application/json",
+  };
+
+  // Get current file SHA (required for updates)
+  const sha = await getFileSha(relativePath);
+
+  // Base64 encode the content
+  const contentBase64 = Buffer.from(content, "utf-8").toString("base64");
+
+  const body = JSON.stringify({
+    message,
+    content: contentBase64,
+    sha,
+    branch: GITHUB_BRANCH,
+  });
+
+  const response = await fetch(url, {
+    method: "PUT",
+    headers,
+    body,
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    console.error(`GitHub API write error for ${relativePath}: ${response.status} - ${errorBody}`);
+    throw new Error(`Failed to write ${relativePath}: ${response.status}`);
+  }
+}
+
+// Helper to write JSON files with proper formatting
+async function writeJsonFile(relativePath: string, data: unknown, message: string): Promise<void> {
+  const content = JSON.stringify(data, null, 2) + "\n";
+  await writeToGitHub(relativePath, content, message);
+}
+
 // Note: We don't use outputSchema because it requires structuredContent responses.
 // Our tools return plain text content which doesn't need schema validation.
 
@@ -993,6 +1061,727 @@ server.registerTool(
     } catch {
       return {
         content: [{ type: "text", text: "Content ideas data not found." }],
+      };
+    }
+  }
+);
+
+// ============================================
+// UPDATE/WRITE TOOLS
+// ============================================
+
+// Tool: Update Skill
+server.registerTool(
+  "update_skill",
+  {
+    title: "Update Skill",
+    description: "Add a new skill or update the proficiency level of an existing skill",
+    inputSchema: {
+      category: z.string().describe("Skill category (e.g., 'programming_languages', 'frameworks_and_libraries', 'databases', 'cloud_and_devops', 'tools', 'AI', 'other')"),
+      skill_name: z.string().describe("Name of the skill"),
+      level: z.enum(["none", "novice", "apprentice", "adept", "expert", "master"]).describe("Proficiency level"),
+    },
+  },
+  async ({ category, skill_name, level }) => {
+    try {
+      const skills = await readJsonFile<Record<string, Record<string, string>>>("profile/skills.json");
+
+      // Ensure category exists
+      if (!skills[category]) {
+        skills[category] = {};
+      }
+
+      const previousLevel = skills[category][skill_name];
+      skills[category][skill_name] = level;
+
+      await writeJsonFile(
+        "profile/skills.json",
+        skills,
+        `Update skill: ${skill_name} (${previousLevel || "new"} → ${level})`
+      );
+
+      return {
+        content: [{ type: "text", text: `Successfully ${previousLevel ? "updated" : "added"} skill "${skill_name}" in ${category} to level "${level}"` }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Failed to update skill: ${error instanceof Error ? error.message : "Unknown error"}` }],
+      };
+    }
+  }
+);
+
+// Tool: Add Experience
+server.registerTool(
+  "add_experience",
+  {
+    title: "Add Experience",
+    description: "Add a new work experience/job entry",
+    inputSchema: {
+      company: z.string().describe("Company name"),
+      role: z.string().describe("Job title/role"),
+      start_date: z.string().describe("Start date (YYYY-MM-DD format)"),
+      end_date: z.string().optional().describe("End date (YYYY-MM-DD format) or 'Present' for current role"),
+      location: z.string().optional().describe("Job location"),
+      job_type: z.enum(["remote", "hybrid", "onsite"]).optional().describe("Type of work arrangement"),
+      responsibilities: z.array(z.string()).optional().describe("List of key responsibilities"),
+      technologies: z.array(z.string()).optional().describe("Technologies used in this role"),
+    },
+  },
+  async ({ company, role, start_date, end_date, location, job_type, responsibilities, technologies }) => {
+    try {
+      const experience = await readJsonFile<Record<string, unknown>>("profile/experience.json");
+
+      experience[company] = {
+        role,
+        start_date,
+        end_date: end_date || "Present",
+        ...(location && { location }),
+        ...(job_type && { job_type }),
+        ...(responsibilities && { responsibilities }),
+        ...(technologies && { technologies }),
+      };
+
+      await writeJsonFile(
+        "profile/experience.json",
+        experience,
+        `Add experience: ${role} at ${company}`
+      );
+
+      return {
+        content: [{ type: "text", text: `Successfully added experience: ${role} at ${company}` }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Failed to add experience: ${error instanceof Error ? error.message : "Unknown error"}` }],
+      };
+    }
+  }
+);
+
+// Tool: Add Certification
+server.registerTool(
+  "add_certification",
+  {
+    title: "Add Certification",
+    description: "Add a new certification or certificate to education",
+    inputSchema: {
+      type: z.enum(["certification", "certificate"]).describe("Type: 'certification' for professional certs, 'certificate' for course completions"),
+      name: z.string().describe("Name of the certification/certificate"),
+      issuer: z.string().describe("Issuing organization"),
+      date: z.string().describe("Date earned (YYYY-MM-DD format)"),
+      credential_id: z.string().optional().describe("Credential ID if applicable"),
+      url: z.string().optional().describe("Verification URL"),
+    },
+  },
+  async ({ type, name, issuer, date, credential_id, url }) => {
+    try {
+      const education = await readJsonFile<Record<string, unknown>>("profile/education.json");
+
+      const arrayKey = type === "certification" ? "certifications" : "certificates";
+      if (!education[arrayKey]) {
+        education[arrayKey] = [];
+      }
+
+      const entry: Record<string, string> = { name, issuer, date };
+      if (credential_id) entry.credential_id = credential_id;
+      if (url) entry.url = url;
+
+      (education[arrayKey] as Array<Record<string, string>>).push(entry);
+
+      await writeJsonFile(
+        "profile/education.json",
+        education,
+        `Add ${type}: ${name} from ${issuer}`
+      );
+
+      return {
+        content: [{ type: "text", text: `Successfully added ${type}: ${name} from ${issuer}` }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Failed to add certification: ${error instanceof Error ? error.message : "Unknown error"}` }],
+      };
+    }
+  }
+);
+
+// Tool: Update Project Status
+server.registerTool(
+  "update_project_status",
+  {
+    title: "Update Project Status",
+    description: "Update a project's status, completion percentage, or move between active/planned/completed",
+    inputSchema: {
+      project_id: z.string().describe("Project identifier (slug/key from the JSON)"),
+      current_status: z.enum(["active", "planned", "completed"]).describe("Current status file where the project is"),
+      new_status: z.enum(["active", "planned", "completed"]).optional().describe("Move project to a different status file"),
+      completion: z.number().min(0).max(100).optional().describe("Update completion percentage (0-100)"),
+      priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("Update project priority"),
+    },
+  },
+  async ({ project_id, current_status, new_status, completion, priority }) => {
+    try {
+      const currentFile = `projects/${current_status}.json`;
+      const projects = await readJsonFile<Record<string, Record<string, unknown>>>(currentFile);
+
+      if (!projects[project_id]) {
+        return {
+          content: [{ type: "text", text: `Project "${project_id}" not found in ${current_status}.json` }],
+        };
+      }
+
+      const project = projects[project_id];
+
+      // Update fields
+      if (completion !== undefined) {
+        project.completion_percentage = completion;
+      }
+      if (priority) {
+        project.priority = priority;
+      }
+
+      // Move to different status file if requested
+      if (new_status && new_status !== current_status) {
+        // Remove from current file
+        delete projects[project_id];
+        await writeJsonFile(currentFile, projects, `Remove project ${project_id} (moving to ${new_status})`);
+
+        // Add to new file
+        const newFile = `projects/${new_status}.json`;
+        const newProjects = await readJsonFile<Record<string, Record<string, unknown>>>(newFile);
+        project.status = new_status;
+        newProjects[project_id] = project;
+        await writeJsonFile(newFile, newProjects, `Add project ${project_id} (moved from ${current_status})`);
+
+        return {
+          content: [{ type: "text", text: `Successfully moved project "${project_id}" from ${current_status} to ${new_status}` }],
+        };
+      } else {
+        // Just update in place
+        projects[project_id] = project;
+        await writeJsonFile(currentFile, projects, `Update project ${project_id}: completion=${completion}, priority=${priority}`);
+
+        return {
+          content: [{ type: "text", text: `Successfully updated project "${project_id}"` }],
+        };
+      }
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Failed to update project: ${error instanceof Error ? error.message : "Unknown error"}` }],
+      };
+    }
+  }
+);
+
+// Tool: Add Project
+server.registerTool(
+  "add_project",
+  {
+    title: "Add Project",
+    description: "Add a new project to the planned projects list",
+    inputSchema: {
+      id: z.string().describe("Project identifier (slug, e.g., 'my-new-project')"),
+      name: z.string().describe("Project name"),
+      description: z.string().describe("Project description"),
+      type: z.enum(["saas", "open-source", "template", "tool", "library", "website"]).describe("Project type"),
+      technologies: z.array(z.string()).describe("Technologies to be used"),
+      problem: z.string().describe("Problem the project solves"),
+      solution: z.string().describe("How the project solves the problem"),
+      target_audience: z.array(z.string()).describe("Target audience"),
+      priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("Project priority"),
+    },
+  },
+  async ({ id, name, description, type, technologies, problem, solution, target_audience, priority }) => {
+    try {
+      const projects = await readJsonFile<Record<string, Record<string, unknown>>>("projects/planned.json");
+
+      if (projects[id]) {
+        return {
+          content: [{ type: "text", text: `Project "${id}" already exists in planned.json` }],
+        };
+      }
+
+      projects[id] = {
+        name,
+        description,
+        type,
+        technologies,
+        problem,
+        solution,
+        target_audience,
+        status: "planned",
+        completion_percentage: 0,
+        priority: priority || "medium",
+        date_added: new Date().toISOString().split("T")[0],
+      };
+
+      await writeJsonFile("projects/planned.json", projects, `Add planned project: ${name}`);
+
+      return {
+        content: [{ type: "text", text: `Successfully added project "${name}" to planned projects` }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Failed to add project: ${error instanceof Error ? error.message : "Unknown error"}` }],
+      };
+    }
+  }
+);
+
+// Tool: Log Job Application
+server.registerTool(
+  "log_job_application",
+  {
+    title: "Log Job Application",
+    description: "Log a new job application",
+    inputSchema: {
+      company: z.string().describe("Company name"),
+      role: z.string().describe("Job title/role"),
+      url: z.string().optional().describe("Job posting URL"),
+      source: z.string().optional().describe("Where you found the job (LinkedIn, HN, etc.)"),
+      salary_range: z.string().optional().describe("Salary range if known"),
+      location: z.string().optional().describe("Job location"),
+      status: z.enum(["applied", "screening", "interviewing", "offer", "rejected", "withdrawn", "ghosted"]).optional().describe("Application status"),
+      notes: z.string().optional().describe("Additional notes"),
+    },
+  },
+  async ({ company, role, url, source, salary_range, location, status, notes }) => {
+    try {
+      const data = await readJsonFile<{ applications: Array<Record<string, unknown>> }>("job-applications/applications.json");
+
+      if (!data.applications) {
+        data.applications = [];
+      }
+
+      // Generate ID
+      const id = `app-${Date.now()}`;
+      const date_applied = new Date().toISOString().split("T")[0];
+
+      const application: Record<string, unknown> = {
+        id,
+        company,
+        role,
+        date_applied,
+        status: status || "applied",
+        last_updated: date_applied,
+      };
+
+      if (url) application.url = url;
+      if (source) application.source = source;
+      if (salary_range) application.salary_range = salary_range;
+      if (location) application.location = location;
+      if (notes) application.notes = notes;
+
+      data.applications.push(application);
+
+      await writeJsonFile(
+        "job-applications/applications.json",
+        data,
+        `Log job application: ${role} at ${company}`
+      );
+
+      return {
+        content: [{ type: "text", text: `Successfully logged application for ${role} at ${company} (ID: ${id})` }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Failed to log application: ${error instanceof Error ? error.message : "Unknown error"}` }],
+      };
+    }
+  }
+);
+
+// Tool: Log Interview
+server.registerTool(
+  "log_interview",
+  {
+    title: "Log Interview",
+    description: "Log an interview for a job application",
+    inputSchema: {
+      company: z.string().describe("Company name"),
+      role: z.string().describe("Job title/role"),
+      round: z.number().describe("Interview round number"),
+      type: z.enum(["phone", "video", "onsite", "technical", "behavioral", "panel"]).describe("Interview type"),
+      date: z.string().describe("Interview date (YYYY-MM-DD)"),
+      interviewer: z.string().optional().describe("Interviewer name"),
+      interviewer_role: z.string().optional().describe("Interviewer's role/title"),
+      prep_notes: z.string().optional().describe("Preparation notes"),
+      outcome: z.enum(["passed", "rejected", "pending", "unknown"]).optional().describe("Interview outcome"),
+      notes: z.string().optional().describe("Post-interview notes"),
+    },
+  },
+  async ({ company, role, round, type, date, interviewer, interviewer_role, prep_notes, outcome, notes }) => {
+    try {
+      const data = await readJsonFile<{ interviews: Array<Record<string, unknown>> }>("job-applications/interviews.json");
+
+      if (!data.interviews) {
+        data.interviews = [];
+      }
+
+      const id = `int-${Date.now()}`;
+
+      const interview: Record<string, unknown> = {
+        id,
+        company,
+        role,
+        round,
+        type,
+        date,
+        outcome: outcome || "pending",
+      };
+
+      if (interviewer) interview.interviewer = interviewer;
+      if (interviewer_role) interview.interviewer_role = interviewer_role;
+      if (prep_notes) interview.prep_notes = prep_notes;
+      if (notes) interview.notes = notes;
+
+      data.interviews.push(interview);
+
+      await writeJsonFile(
+        "job-applications/interviews.json",
+        data,
+        `Log interview: Round ${round} at ${company}`
+      );
+
+      return {
+        content: [{ type: "text", text: `Successfully logged Round ${round} ${type} interview at ${company} (ID: ${id})` }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Failed to log interview: ${error instanceof Error ? error.message : "Unknown error"}` }],
+      };
+    }
+  }
+);
+
+// Tool: Update Financials
+server.registerTool(
+  "update_financials",
+  {
+    title: "Update Financials",
+    description: "Update financial data for Codaissance or TamperTantrum Labs",
+    inputSchema: {
+      business: z.enum(["codaissance", "tampertantrum-labs"]).describe("Which business to update"),
+      mrr: z.number().optional().describe("Update Monthly Recurring Revenue"),
+      customers: z.number().optional().describe("Update customer count"),
+      expense_name: z.string().optional().describe("Name of expense to add"),
+      expense_amount: z.number().optional().describe("Amount of expense to add"),
+      expense_type: z.enum(["monthly_recurring", "one_time"]).optional().describe("Type of expense"),
+    },
+  },
+  async ({ business, mrr, customers, expense_name, expense_amount, expense_type }) => {
+    try {
+      const financials = await readJsonFile<Record<string, unknown>>(`business/${business}/financials.json`);
+
+      const updates: string[] = [];
+
+      if (mrr !== undefined) {
+        (financials.revenue as Record<string, unknown>).mrr = mrr;
+        (financials.revenue as Record<string, unknown>).arr = mrr * 12;
+        updates.push(`MRR: $${mrr}`);
+      }
+
+      if (customers !== undefined) {
+        (financials.metrics as Record<string, unknown>).customers = customers;
+        updates.push(`Customers: ${customers}`);
+      }
+
+      if (expense_name && expense_amount !== undefined && expense_type) {
+        const expenses = financials.expenses as Record<string, unknown[]>;
+        if (!expenses[expense_type]) {
+          expenses[expense_type] = [];
+        }
+        expenses[expense_type].push({
+          name: expense_name,
+          amount: expense_amount,
+          date: new Date().toISOString().split("T")[0],
+        });
+        updates.push(`Expense: ${expense_name} ($${expense_amount})`);
+      }
+
+      await writeJsonFile(
+        `business/${business}/financials.json`,
+        financials,
+        `Update ${business} financials: ${updates.join(", ")}`
+      );
+
+      return {
+        content: [{ type: "text", text: `Successfully updated ${business} financials: ${updates.join(", ")}` }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Failed to update financials: ${error instanceof Error ? error.message : "Unknown error"}` }],
+      };
+    }
+  }
+);
+
+// Tool: Update LinkedIn Metrics
+server.registerTool(
+  "update_linkedin_metrics",
+  {
+    title: "Update LinkedIn Metrics",
+    description: "Update LinkedIn metrics for personal or company pages",
+    inputSchema: {
+      account: z.enum(["personal", "codaissance", "tampertantrum"]).describe("Which account to update"),
+      connections: z.number().optional().describe("Update connection/follower count"),
+      profile_views: z.number().optional().describe("Update profile views"),
+      post_impressions: z.number().optional().describe("Update post impressions"),
+      search_appearances: z.number().optional().describe("Update search appearances"),
+    },
+  },
+  async ({ account, connections, profile_views, post_impressions, search_appearances }) => {
+    try {
+      const filePath = `linkedin/${account}-metrics.json`;
+      const metrics = await readJsonFile<Record<string, unknown>>(filePath);
+
+      const updates: string[] = [];
+      const today = new Date().toISOString().split("T")[0];
+
+      if (connections !== undefined) {
+        metrics.connections = connections;
+        metrics.followers = connections;
+        updates.push(`connections: ${connections}`);
+      }
+
+      if (profile_views !== undefined) {
+        metrics.profile_views = profile_views;
+        updates.push(`profile_views: ${profile_views}`);
+      }
+
+      if (post_impressions !== undefined) {
+        metrics.post_impressions = post_impressions;
+        updates.push(`post_impressions: ${post_impressions}`);
+      }
+
+      if (search_appearances !== undefined) {
+        metrics.search_appearances = search_appearances;
+        updates.push(`search_appearances: ${search_appearances}`);
+      }
+
+      metrics.last_updated = today;
+
+      await writeJsonFile(filePath, metrics, `Update ${account} LinkedIn metrics: ${updates.join(", ")}`);
+
+      return {
+        content: [{ type: "text", text: `Successfully updated ${account} LinkedIn metrics: ${updates.join(", ")}` }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Failed to update LinkedIn metrics: ${error instanceof Error ? error.message : "Unknown error"}` }],
+      };
+    }
+  }
+);
+
+// Tool: Add Idea
+server.registerTool(
+  "add_idea",
+  {
+    title: "Add Idea",
+    description: "Add a new idea to personal or business idea banks",
+    inputSchema: {
+      source: z.enum(["personal", "codaissance", "tampertantrum-labs"]).describe("Which idea bank to add to"),
+      name: z.string().describe("Idea name/title"),
+      description: z.string().describe("Idea description"),
+      problem: z.string().describe("Problem it solves"),
+      solution: z.string().describe("Proposed solution"),
+      target_audience: z.string().optional().describe("Target audience"),
+      effort: z.enum(["low", "medium", "high"]).optional().describe("Estimated effort level"),
+      potential_value: z.enum(["low", "medium", "high"]).optional().describe("Potential value/impact"),
+    },
+  },
+  async ({ source, name, description, problem, solution, target_audience, effort, potential_value }) => {
+    try {
+      const filePath = source === "personal"
+        ? "ideas/personal/ideas.json"
+        : `ideas/business/${source}/ideas.json`;
+
+      const data = await readJsonFile<{ ideas: Array<Record<string, unknown>> }>(filePath);
+
+      if (!data.ideas) {
+        data.ideas = [];
+      }
+
+      const today = new Date().toISOString().split("T")[0];
+
+      data.ideas.push({
+        name,
+        description,
+        problem,
+        solution,
+        target_audience: target_audience || "",
+        effort: effort || "medium",
+        potential_value: potential_value || "medium",
+        status: "raw",
+        date_added: today,
+        date_updated: today,
+      });
+
+      await writeJsonFile(filePath, data, `Add idea: ${name}`);
+
+      return {
+        content: [{ type: "text", text: `Successfully added idea "${name}" to ${source} ideas` }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Failed to add idea: ${error instanceof Error ? error.message : "Unknown error"}` }],
+      };
+    }
+  }
+);
+
+// Tool: Update Milestone
+server.registerTool(
+  "update_milestone",
+  {
+    title: "Update Milestone",
+    description: "Update a career roadmap milestone's status or completion percentage",
+    inputSchema: {
+      milestone_id: z.string().describe("Milestone ID (e.g., 'm1', 'm2', etc.)"),
+      status: z.enum(["in_progress", "not_started", "completed"]).optional().describe("Update milestone status"),
+      completion: z.number().min(0).max(100).optional().describe("Update completion percentage"),
+    },
+  },
+  async ({ milestone_id, status, completion }) => {
+    try {
+      const roadmap = await readJsonFile<{ career_roadmap: { milestones: Array<Record<string, unknown>>; last_updated: string } }>("career/roadmap.json");
+
+      const milestone = roadmap.career_roadmap.milestones.find(m => m.id === milestone_id);
+
+      if (!milestone) {
+        return {
+          content: [{ type: "text", text: `Milestone "${milestone_id}" not found` }],
+        };
+      }
+
+      const updates: string[] = [];
+
+      if (status) {
+        milestone.status = status;
+        updates.push(`status: ${status}`);
+      }
+
+      if (completion !== undefined) {
+        milestone.completion = completion;
+        updates.push(`completion: ${completion}%`);
+      }
+
+      roadmap.career_roadmap.last_updated = new Date().toISOString().split("T")[0];
+
+      await writeJsonFile("career/roadmap.json", roadmap, `Update milestone ${milestone_id}: ${updates.join(", ")}`);
+
+      return {
+        content: [{ type: "text", text: `Successfully updated milestone "${milestone_id}" (${milestone.title}): ${updates.join(", ")}` }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Failed to update milestone: ${error instanceof Error ? error.message : "Unknown error"}` }],
+      };
+    }
+  }
+);
+
+// Tool: Update Learning Progress
+server.registerTool(
+  "update_learning_progress",
+  {
+    title: "Update Learning Progress",
+    description: "Add or move items in the learning roadmap queue",
+    inputSchema: {
+      action: z.enum(["add", "move", "complete"]).describe("Action: add new item, move between queues, or mark complete"),
+      skill: z.string().describe("Skill name"),
+      from_queue: z.enum(["current_focus", "queue", "backlog", "on_hold"]).optional().describe("Source queue (for move action)"),
+      to_queue: z.enum(["current_focus", "queue", "backlog", "on_hold"]).optional().describe("Destination queue (for add/move action)"),
+      category: z.string().optional().describe("Skill category (for add action)"),
+      priority: z.enum(["low", "medium", "high"]).optional().describe("Priority (for add action)"),
+      why: z.string().optional().describe("Why learning this skill (for add action)"),
+    },
+  },
+  async ({ action, skill, from_queue, to_queue, category, priority, why }) => {
+    try {
+      const roadmap = await readJsonFile<Record<string, Array<Record<string, unknown>>>>("learning/roadmap.json");
+
+      if (action === "add" && to_queue) {
+        if (!roadmap[to_queue]) {
+          roadmap[to_queue] = [];
+        }
+
+        roadmap[to_queue].push({
+          skill,
+          category: category || "other",
+          priority: priority || "medium",
+          why: why || "",
+          date_added: new Date().toISOString().split("T")[0],
+        });
+
+        await writeJsonFile("learning/roadmap.json", roadmap, `Add to learning ${to_queue}: ${skill}`);
+
+        return {
+          content: [{ type: "text", text: `Successfully added "${skill}" to ${to_queue}` }],
+        };
+      }
+
+      if (action === "move" && from_queue && to_queue) {
+        const fromArray = roadmap[from_queue] || [];
+        const index = fromArray.findIndex(item => item.skill === skill);
+
+        if (index === -1) {
+          return {
+            content: [{ type: "text", text: `Skill "${skill}" not found in ${from_queue}` }],
+          };
+        }
+
+        const [item] = fromArray.splice(index, 1);
+        if (!roadmap[to_queue]) {
+          roadmap[to_queue] = [];
+        }
+        roadmap[to_queue].push(item);
+
+        await writeJsonFile("learning/roadmap.json", roadmap, `Move learning item: ${skill} from ${from_queue} to ${to_queue}`);
+
+        return {
+          content: [{ type: "text", text: `Successfully moved "${skill}" from ${from_queue} to ${to_queue}` }],
+        };
+      }
+
+      if (action === "complete" && from_queue) {
+        const fromArray = roadmap[from_queue] || [];
+        const index = fromArray.findIndex(item => item.skill === skill);
+
+        if (index === -1) {
+          return {
+            content: [{ type: "text", text: `Skill "${skill}" not found in ${from_queue}` }],
+          };
+        }
+
+        const [item] = fromArray.splice(index, 1);
+
+        // Add to completed.json
+        const completed = await readJsonFile<{ entries: Array<Record<string, unknown>> }>("learning/completed.json");
+        if (!completed.entries) {
+          completed.entries = [];
+        }
+        completed.entries.push({
+          ...item,
+          date_completed: new Date().toISOString().split("T")[0],
+        });
+
+        await writeJsonFile("learning/roadmap.json", roadmap, `Complete learning item: ${skill}`);
+        await writeJsonFile("learning/completed.json", completed, `Add completed learning: ${skill}`);
+
+        return {
+          content: [{ type: "text", text: `Successfully marked "${skill}" as completed` }],
+        };
+      }
+
+      return {
+        content: [{ type: "text", text: "Invalid action or missing parameters" }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Failed to update learning progress: ${error instanceof Error ? error.message : "Unknown error"}` }],
       };
     }
   }
