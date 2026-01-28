@@ -65,7 +65,8 @@ async function readMarkdownFile(relativePath: string): Promise<string> {
 }
 
 // Helper to get file SHA (required for updates via GitHub API)
-async function getFileSha(relativePath: string): Promise<string> {
+// Returns undefined if file doesn't exist (allows creating new files)
+async function getFileSha(relativePath: string): Promise<string | undefined> {
   const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${relativePath}?ref=${GITHUB_BRANCH}`;
   const headers: Record<string, string> = {
     "Accept": "application/vnd.github.v3+json",
@@ -79,6 +80,10 @@ async function getFileSha(relativePath: string): Promise<string> {
 
   const response = await fetch(url, { headers });
   if (!response.ok) {
+    // 404 means file doesn't exist - that's OK for creating new files
+    if (response.status === 404) {
+      return undefined;
+    }
     throw new Error(`Failed to get SHA for ${relativePath}: ${response.status}`);
   }
   const data = await response.json() as { sha: string };
@@ -86,6 +91,7 @@ async function getFileSha(relativePath: string): Promise<string> {
 }
 
 // Helper to write files to GitHub via Contents API
+// Supports both creating new files and updating existing files
 async function writeToGitHub(relativePath: string, content: string, message: string): Promise<void> {
   if (!GITHUB_TOKEN) {
     throw new Error("GITHUB_TOKEN not configured - cannot write to repository");
@@ -100,23 +106,29 @@ async function writeToGitHub(relativePath: string, content: string, message: str
     "Content-Type": "application/json",
   };
 
-  // Get current file SHA (required for updates)
+  // Try to get current file SHA (undefined if file doesn't exist)
   const sha = await getFileSha(relativePath);
 
   // Base64 encode the content
   const contentBase64 = Buffer.from(content, "utf-8").toString("base64");
 
-  const body = JSON.stringify({
+  // Build request body - only include SHA if updating existing file
+  const requestBody: Record<string, string> = {
     message,
     content: contentBase64,
-    sha,
     branch: GITHUB_BRANCH,
-  });
+  };
+
+  if (sha) {
+    // File exists - include SHA for update
+    requestBody.sha = sha;
+  }
+  // If no SHA, this is a new file creation - omit SHA
 
   const response = await fetch(url, {
     method: "PUT",
     headers,
-    body,
+    body: JSON.stringify(requestBody),
   });
 
   if (!response.ok) {
@@ -124,6 +136,8 @@ async function writeToGitHub(relativePath: string, content: string, message: str
     console.error(`GitHub API write error for ${relativePath}: ${response.status} - ${errorBody}`);
     throw new Error(`Failed to write ${relativePath}: ${response.status}`);
   }
+
+  console.log(`Successfully ${sha ? "updated" : "created"} ${relativePath}`);
 }
 
 // Helper to write JSON files with proper formatting
