@@ -2795,6 +2795,125 @@ server.registerTool(
   }
 );
 
+// ===== UPDATE BUSINESS STRATEGY =====
+server.registerTool(
+  "update_business_strategy",
+  {
+    title: "Update Business Strategy",
+    description: "Update business strategy, personas, or marketing data for Codaissance or TamperTantrum Labs",
+    inputSchema: {
+      business: z.enum(["codaissance", "tampertantrum-labs"]).describe("Which business to update"),
+      file_type: z.enum(["strategy", "personas", "marketing", "brand", "design-system"]).describe("Which file to update"),
+      field_path: z.string().describe("Dot-notation path to the field to update (e.g., 'mission', 'positioning.tagline', 'target_personas[0].name')"),
+      value: z.union([z.string(), z.number(), z.boolean(), z.array(z.string())]).describe("New value for the field"),
+    },
+  },
+  async ({ business, file_type, field_path, value }) => {
+    try {
+      const filePath = `business/${business}/${file_type}.json`;
+      const data = await readJsonFile<Record<string, unknown>>(filePath);
+
+      // Navigate to the field using dot notation
+      const pathParts = field_path.split(".");
+      let current: Record<string, unknown> = data;
+
+      for (let i = 0; i < pathParts.length - 1; i++) {
+        const part = pathParts[i];
+        // Handle array notation like "personas[0]"
+        const arrayMatch = part.match(/^(\w+)\[(\d+)\]$/);
+        if (arrayMatch) {
+          const [, arrayName, indexStr] = arrayMatch;
+          const arr = current[arrayName] as unknown[];
+          current = arr[parseInt(indexStr)] as Record<string, unknown>;
+        } else {
+          if (!current[part]) {
+            current[part] = {};
+          }
+          current = current[part] as Record<string, unknown>;
+        }
+      }
+
+      const lastPart = pathParts[pathParts.length - 1];
+      // Handle array notation for final part
+      const arrayMatch = lastPart.match(/^(\w+)\[(\d+)\]$/);
+      if (arrayMatch) {
+        const [, arrayName, indexStr] = arrayMatch;
+        (current[arrayName] as unknown[])[parseInt(indexStr)] = value;
+      } else {
+        current[lastPart] = value;
+      }
+
+      await writeJsonFile(filePath, data, `Update ${business} ${file_type}: ${field_path}`);
+
+      return {
+        content: [{ type: "text", text: `Updated ${business}/${file_type}.json: ${field_path} = ${JSON.stringify(value)}` }],
+      };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Failed to update business strategy: ${error instanceof Error ? error.message : "Unknown error"}` }] };
+    }
+  }
+);
+
+// ===== UPDATE README =====
+server.registerTool(
+  "update_readme",
+  {
+    title: "Update README",
+    description: "Update a README file (GitHub profile README, project README, or any markdown file)",
+    inputSchema: {
+      file_path: z.string().describe("Path to the README file (e.g., 'github/README.md', 'projects/specs/vibiom/README.md')"),
+      content: z.string().describe("Full new content for the README file"),
+    },
+  },
+  async ({ file_path, content }) => {
+    try {
+      // Validate it's a markdown file
+      if (!file_path.endsWith(".md")) {
+        return { content: [{ type: "text", text: "Only markdown (.md) files can be updated with this tool" }] };
+      }
+
+      await writeToGitHub(file_path, content, `Update README: ${file_path}`);
+
+      return {
+        content: [{ type: "text", text: `Successfully updated ${file_path}` }],
+      };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Failed to update README: ${error instanceof Error ? error.message : "Unknown error"}` }] };
+    }
+  }
+);
+
+// ===== UPDATE PROJECT SPEC =====
+server.registerTool(
+  "update_project_spec",
+  {
+    title: "Update Project Spec",
+    description: "Update or create a project specification file in projects/specs/{project_key}/",
+    inputSchema: {
+      project_key: z.string().describe("Project key/identifier (e.g., 'vibiom', 'chatbot-template')"),
+      file_name: z.string().describe("File name to update (e.g., 'README.md', 'MVP_SPEC.md', 'architecture.md', 'style-guide.md')"),
+      content: z.string().describe("Full content for the spec file"),
+    },
+  },
+  async ({ project_key, file_name, content }) => {
+    try {
+      // Validate file extension
+      if (!file_name.endsWith(".md") && !file_name.endsWith(".json")) {
+        return { content: [{ type: "text", text: "Only markdown (.md) and JSON (.json) files are allowed in project specs" }] };
+      }
+
+      const filePath = `projects/specs/${project_key}/${file_name}`;
+      await writeToGitHub(filePath, content, `Update project spec: ${project_key}/${file_name}`);
+
+      return {
+        content: [{ type: "text", text: `Successfully updated ${filePath}` }],
+      };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Failed to update project spec: ${error instanceof Error ? error.message : "Unknown error"}` }] };
+    }
+  }
+);
+
 // HTTP Server for Vercel/remote deployment
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 
