@@ -869,8 +869,16 @@ server.registerTool(
         };
       }
 
+      // Return summary instead of full document (29KB is too large for output)
+      const summary = {
+        available_principles: Object.keys(principles),
+        career_vision_questions: chiefAim.career_vision_questions,
+        definite_chief_aim: (principles.definiteness_of_purpose as Record<string, unknown>)?.my_definite_chief_aim,
+        usage: "Call with principle parameter to get details (e.g., principle: 'definiteness_of_purpose')",
+      };
+
       return {
-        content: [{ type: "text", text: JSON.stringify(chiefAim, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(summary, null, 2) }],
       };
     } catch {
       return {
