@@ -2914,6 +2914,537 @@ server.registerTool(
   }
 );
 
+// ============================================
+// JOURNAL TOOLS
+// ============================================
+
+// Helper to get month name
+function getMonthName(month: number): string {
+  const months = [
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december"
+  ];
+  return months[month - 1];
+}
+
+// Helper to get day of week
+function getDayOfWeek(date: Date): string {
+  const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  return days[date.getDay()];
+}
+
+// Helper to parse YAML frontmatter from markdown
+function parseJournalEntry(content: string): { metadata: Record<string, unknown>; body: string } {
+  const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  if (!frontmatterMatch) {
+    return { metadata: {}, body: content };
+  }
+
+  const yamlContent = frontmatterMatch[1];
+  const body = frontmatterMatch[2];
+
+  // Simple YAML parser for our known structure
+  const metadata: Record<string, unknown> = {};
+  const lines = yamlContent.split("\n");
+  let currentKey: string | null = null;
+  let currentArray: string[] = [];
+
+  for (const line of lines) {
+    if (line.startsWith("  - ")) {
+      // Array item
+      currentArray.push(line.substring(4));
+    } else if (line.includes(": ")) {
+      // Save previous array if exists
+      if (currentKey && currentArray.length > 0) {
+        metadata[currentKey] = currentArray;
+        currentArray = [];
+      }
+
+      const colonIndex = line.indexOf(": ");
+      const key = line.substring(0, colonIndex);
+      const value = line.substring(colonIndex + 2);
+      currentKey = key;
+
+      if (value.startsWith("[") && value.endsWith("]")) {
+        // Inline array
+        metadata[key] = value.slice(1, -1).split(", ").map(s => s.trim());
+      } else if (value === "") {
+        // Array will follow
+        currentArray = [];
+      } else {
+        // Simple value
+        const numValue = Number(value);
+        metadata[key] = isNaN(numValue) ? value : numValue;
+      }
+    }
+  }
+
+  // Save last array if exists
+  if (currentKey && currentArray.length > 0) {
+    metadata[currentKey] = currentArray;
+  }
+
+  return { metadata, body };
+}
+
+// ===== ADD JOURNAL ENTRY =====
+server.registerTool(
+  "add_journal_entry",
+  {
+    title: "Add Journal Entry",
+    description: "Create a new daily journal entry with structured metadata",
+    inputSchema: {
+      date: z.string().describe("Date for the entry (YYYY-MM-DD)"),
+      content: z.string().describe("Markdown content for the entry body"),
+      mood: z.string().optional().describe("Descriptive mood (e.g., 'productive', 'tired', 'energized')"),
+      energy_level: z.number().min(1).max(10).optional().describe("Energy level 1-10"),
+      tags: z.array(z.string()).optional().describe("Array of tags for categorization"),
+      wins: z.array(z.string()).optional().describe("Array of wins/accomplishments"),
+      struggles: z.array(z.string()).optional().describe("Array of struggles/challenges"),
+      kids_moments: z.array(z.string()).optional().describe("Array of memorable kid moments"),
+      napoleon_hill_principle: z.string().optional().describe("Which Napoleon Hill principle applied today"),
+    },
+  },
+  async ({ date, content, mood, energy_level, tags, wins, struggles, kids_moments, napoleon_hill_principle }) => {
+    try {
+      // Parse date
+      const [year, month, day] = date.split("-").map(Number);
+      const dateObj = new Date(year, month - 1, day);
+      const monthName = getMonthName(month);
+      const dayOfWeek = getDayOfWeek(dateObj);
+      const monthFolder = `${month.toString().padStart(2, "0")}-${monthName}`;
+
+      // Build file path
+      const filePath = `journal/entries/${year}/${monthFolder}/${date}.md`;
+
+      // Check if entry already exists
+      try {
+        await fetchFromGitHub(filePath);
+        return { content: [{ type: "text", text: `Journal entry for ${date} already exists. Use a different date or update the existing entry.` }] };
+      } catch {
+        // File doesn't exist, which is what we want
+      }
+
+      // Build YAML frontmatter
+      let frontmatter = `---\ndate: ${date}\nday_of_week: ${dayOfWeek}\n`;
+      if (mood) frontmatter += `mood: ${mood}\n`;
+      if (energy_level) frontmatter += `energy_level: ${energy_level}\n`;
+      if (tags && tags.length > 0) frontmatter += `tags: [${tags.join(", ")}]\n`;
+      if (wins && wins.length > 0) {
+        frontmatter += `wins:\n`;
+        for (const win of wins) frontmatter += `  - ${win}\n`;
+      }
+      if (struggles && struggles.length > 0) {
+        frontmatter += `struggles:\n`;
+        for (const struggle of struggles) frontmatter += `  - ${struggle}\n`;
+      }
+      if (kids_moments && kids_moments.length > 0) {
+        frontmatter += `kids_moments:\n`;
+        for (const moment of kids_moments) frontmatter += `  - ${moment}\n`;
+      }
+      if (napoleon_hill_principle) frontmatter += `napoleon_hill_principle: ${napoleon_hill_principle}\n`;
+      frontmatter += `---\n\n`;
+
+      const fullContent = frontmatter + content;
+
+      await writeToGitHub(filePath, fullContent, `Add journal entry: ${date}`);
+
+      return {
+        content: [{ type: "text", text: `Journal entry created: ${filePath}` }],
+      };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Failed to add journal entry: ${error instanceof Error ? error.message : "Unknown error"}` }] };
+    }
+  }
+);
+
+// ===== GET TODAY'S JOURNAL =====
+server.registerTool(
+  "get_todays_journal",
+  {
+    title: "Get Today's Journal",
+    description: "Check if a journal entry exists for today (or a specific date) and return its content",
+    inputSchema: {
+      date: z.string().optional().describe("Date to check (YYYY-MM-DD). Defaults to today."),
+    },
+  },
+  async ({ date }) => {
+    try {
+      // Use provided date or today
+      const targetDate = date || new Date().toISOString().split("T")[0];
+      const [year, month] = targetDate.split("-").map(Number);
+      const monthName = getMonthName(month);
+      const monthFolder = `${month.toString().padStart(2, "0")}-${monthName}`;
+
+      const filePath = `journal/entries/${year}/${monthFolder}/${targetDate}.md`;
+
+      try {
+        const content = await fetchFromGitHub(filePath);
+        const { metadata, body } = parseJournalEntry(content);
+
+        return {
+          content: [{ type: "text", text: JSON.stringify({
+            exists: true,
+            path: filePath,
+            content: content,
+            metadata: metadata,
+          }, null, 2) }],
+        };
+      } catch {
+        return {
+          content: [{ type: "text", text: JSON.stringify({
+            exists: false,
+            path: filePath,
+            content: null,
+            metadata: null,
+          }, null, 2) }],
+        };
+      }
+    } catch (error) {
+      return { content: [{ type: "text", text: `Failed to get journal: ${error instanceof Error ? error.message : "Unknown error"}` }] };
+    }
+  }
+);
+
+// ===== LIST RECENT JOURNAL ENTRIES =====
+server.registerTool(
+  "list_recent_journal_entries",
+  {
+    title: "List Recent Journal Entries",
+    description: "Get recent journal entries for pattern recognition",
+    inputSchema: {
+      days: z.number().min(1).max(30).optional().describe("How many days back to look (default: 7, max: 30)"),
+      tags: z.array(z.string()).optional().describe("Filter by tags"),
+    },
+  },
+  async ({ days, tags }) => {
+    try {
+      const numDays = days || 7;
+      const entries: Array<{
+        date: string;
+        mood?: string;
+        energy_level?: number;
+        tags?: string[];
+        wins?: string[];
+        struggles?: string[];
+        path: string;
+      }> = [];
+
+      const today = new Date();
+
+      for (let i = 0; i < numDays; i++) {
+        const date = new Date(today);
+        date.setDate(date.getDate() - i);
+        const dateStr = date.toISOString().split("T")[0];
+        const [year, month] = dateStr.split("-").map(Number);
+        const monthName = getMonthName(month);
+        const monthFolder = `${month.toString().padStart(2, "0")}-${monthName}`;
+        const filePath = `journal/entries/${year}/${monthFolder}/${dateStr}.md`;
+
+        try {
+          const content = await fetchFromGitHub(filePath);
+          const { metadata } = parseJournalEntry(content);
+
+          // Filter by tags if specified
+          if (tags && tags.length > 0) {
+            const entryTags = metadata.tags as string[] | undefined;
+            if (!entryTags || !tags.some(t => entryTags.includes(t))) {
+              continue;
+            }
+          }
+
+          entries.push({
+            date: dateStr,
+            mood: metadata.mood as string | undefined,
+            energy_level: metadata.energy_level as number | undefined,
+            tags: metadata.tags as string[] | undefined,
+            wins: metadata.wins as string[] | undefined,
+            struggles: metadata.struggles as string[] | undefined,
+            path: filePath,
+          });
+        } catch {
+          // Entry doesn't exist for this day
+        }
+      }
+
+      const fromDate = new Date(today);
+      fromDate.setDate(fromDate.getDate() - numDays + 1);
+
+      return {
+        content: [{ type: "text", text: JSON.stringify({
+          entries,
+          count: entries.length,
+          date_range: {
+            from: fromDate.toISOString().split("T")[0],
+            to: today.toISOString().split("T")[0],
+          },
+        }, null, 2) }],
+      };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Failed to list journal entries: ${error instanceof Error ? error.message : "Unknown error"}` }] };
+    }
+  }
+);
+
+// ===== SEARCH JOURNAL =====
+server.registerTool(
+  "search_journal",
+  {
+    title: "Search Journal",
+    description: "Search journal entries by keyword, tags, or date range",
+    inputSchema: {
+      query: z.string().optional().describe("Search term to find in content"),
+      tags: z.array(z.string()).optional().describe("Filter by tags"),
+      from_date: z.string().optional().describe("Start date (YYYY-MM-DD)"),
+      to_date: z.string().optional().describe("End date (YYYY-MM-DD)"),
+      limit: z.number().min(1).max(100).optional().describe("Max results (default: 20)"),
+    },
+  },
+  async ({ query, tags, from_date, to_date, limit }) => {
+    try {
+      const maxResults = limit || 20;
+      const results: Array<{
+        date: string;
+        excerpt: string;
+        tags?: string[];
+        path: string;
+        relevance_score: number;
+      }> = [];
+
+      // Calculate date range (default: last 90 days)
+      const endDate = to_date ? new Date(to_date) : new Date();
+      const startDate = from_date ? new Date(from_date) : new Date(endDate.getTime() - 90 * 24 * 60 * 60 * 1000);
+
+      const currentDate = new Date(endDate);
+
+      while (currentDate >= startDate && results.length < maxResults) {
+        const dateStr = currentDate.toISOString().split("T")[0];
+        const [year, month] = dateStr.split("-").map(Number);
+        const monthName = getMonthName(month);
+        const monthFolder = `${month.toString().padStart(2, "0")}-${monthName}`;
+        const filePath = `journal/entries/${year}/${monthFolder}/${dateStr}.md`;
+
+        try {
+          const content = await fetchFromGitHub(filePath);
+          const { metadata, body } = parseJournalEntry(content);
+
+          // Check tags filter
+          if (tags && tags.length > 0) {
+            const entryTags = metadata.tags as string[] | undefined;
+            if (!entryTags || !tags.some(t => entryTags.includes(t))) {
+              currentDate.setDate(currentDate.getDate() - 1);
+              continue;
+            }
+          }
+
+          // Check query filter
+          let relevanceScore = 1;
+          if (query) {
+            const queryLower = query.toLowerCase();
+            const contentLower = content.toLowerCase();
+            if (!contentLower.includes(queryLower)) {
+              currentDate.setDate(currentDate.getDate() - 1);
+              continue;
+            }
+            // Calculate simple relevance score
+            const matches = contentLower.split(queryLower).length - 1;
+            relevanceScore = Math.min(1, matches / 5);
+          }
+
+          // Extract excerpt around the query
+          let excerpt = body.substring(0, 200);
+          if (query) {
+            const queryIndex = body.toLowerCase().indexOf(query.toLowerCase());
+            if (queryIndex >= 0) {
+              const start = Math.max(0, queryIndex - 50);
+              const end = Math.min(body.length, queryIndex + query.length + 100);
+              excerpt = "..." + body.substring(start, end) + "...";
+            }
+          }
+
+          results.push({
+            date: dateStr,
+            excerpt: excerpt.trim(),
+            tags: metadata.tags as string[] | undefined,
+            path: filePath,
+            relevance_score: relevanceScore,
+          });
+        } catch {
+          // Entry doesn't exist
+        }
+
+        currentDate.setDate(currentDate.getDate() - 1);
+      }
+
+      // Sort by relevance if query provided
+      if (query) {
+        results.sort((a, b) => b.relevance_score - a.relevance_score);
+      }
+
+      return {
+        content: [{ type: "text", text: JSON.stringify({
+          results,
+          count: results.length,
+          query: query || null,
+        }, null, 2) }],
+      };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Failed to search journal: ${error instanceof Error ? error.message : "Unknown error"}` }] };
+    }
+  }
+);
+
+// ===== EXTRACT STORY IDEAS =====
+server.registerTool(
+  "extract_story_ideas",
+  {
+    title: "Extract Story Ideas",
+    description: "Identify story-worthy moments from journal entries for LinkedIn Personal Stories pillar",
+    inputSchema: {
+      from_date: z.string().optional().describe("Start date (YYYY-MM-DD). Default: 30 days ago"),
+      to_date: z.string().optional().describe("End date (YYYY-MM-DD). Default: today"),
+    },
+  },
+  async ({ from_date, to_date }) => {
+    try {
+      // Calculate date range
+      const endDate = to_date ? new Date(to_date) : new Date();
+      const startDate = from_date ? new Date(from_date) : new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+      // Collect all journal entries in range
+      const entriesData: Array<{
+        date: string;
+        content: string;
+        metadata: Record<string, unknown>;
+      }> = [];
+
+      const currentDate = new Date(endDate);
+
+      while (currentDate >= startDate) {
+        const dateStr = currentDate.toISOString().split("T")[0];
+        const [year, month] = dateStr.split("-").map(Number);
+        const monthName = getMonthName(month);
+        const monthFolder = `${month.toString().padStart(2, "0")}-${monthName}`;
+        const filePath = `journal/entries/${year}/${monthFolder}/${dateStr}.md`;
+
+        try {
+          const content = await fetchFromGitHub(filePath);
+          const { metadata, body } = parseJournalEntry(content);
+          entriesData.push({
+            date: dateStr,
+            content: body,
+            metadata,
+          });
+        } catch {
+          // Entry doesn't exist
+        }
+
+        currentDate.setDate(currentDate.getDate() - 1);
+      }
+
+      if (entriesData.length === 0) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({
+            story_ideas: [],
+            count: 0,
+            message: "No journal entries found in the specified date range.",
+          }, null, 2) }],
+        };
+      }
+
+      // Identify story-worthy themes based on metadata patterns
+      const storyIdeas: Array<{
+        id: string;
+        theme: string;
+        title: string;
+        source_entries: string[];
+        excerpt: string;
+        suggested_tags: string[];
+      }> = [];
+
+      // Theme 1: Working Dad moments (kids_moments + work content)
+      const kidsEntries = entriesData.filter(e =>
+        (e.metadata.kids_moments as string[] | undefined)?.length ?? 0 > 0
+      );
+      if (kidsEntries.length >= 2) {
+        const moments = kidsEntries.flatMap(e => e.metadata.kids_moments as string[] || []);
+        storyIdeas.push({
+          id: `story-${endDate.toISOString().split("T")[0]}-working-dad`,
+          theme: "working-dad-reality",
+          title: "Building While Parenting",
+          source_entries: kidsEntries.map(e => e.date),
+          excerpt: moments.slice(0, 3).join(" | "),
+          suggested_tags: ["working-dad", "build-in-public", "work-life-balance"],
+        });
+      }
+
+      // Theme 2: Struggles and lessons
+      const struggleEntries = entriesData.filter(e =>
+        (e.metadata.struggles as string[] | undefined)?.length ?? 0 > 0
+      );
+      if (struggleEntries.length >= 1) {
+        const struggles = struggleEntries.flatMap(e => e.metadata.struggles as string[] || []);
+        storyIdeas.push({
+          id: `story-${endDate.toISOString().split("T")[0]}-lessons`,
+          theme: "failures-and-lessons",
+          title: "What Went Wrong (And What I Learned)",
+          source_entries: struggleEntries.map(e => e.date),
+          excerpt: struggles.slice(0, 3).join(" | "),
+          suggested_tags: ["lessons-learned", "transparency", "growth"],
+        });
+      }
+
+      // Theme 3: Wins and progress
+      const winEntries = entriesData.filter(e =>
+        (e.metadata.wins as string[] | undefined)?.length ?? 0 > 0
+      );
+      if (winEntries.length >= 2) {
+        const wins = winEntries.flatMap(e => e.metadata.wins as string[] || []);
+        storyIdeas.push({
+          id: `story-${endDate.toISOString().split("T")[0]}-progress`,
+          theme: "build-in-public-progress",
+          title: "Small Wins Add Up",
+          source_entries: winEntries.map(e => e.date),
+          excerpt: wins.slice(0, 3).join(" | "),
+          suggested_tags: ["build-in-public", "progress", "wins"],
+        });
+      }
+
+      // Theme 4: Energy/mood patterns
+      const lowEnergyDays = entriesData.filter(e =>
+        (e.metadata.energy_level as number || 10) <= 4
+      );
+      const highEnergyDays = entriesData.filter(e =>
+        (e.metadata.energy_level as number || 0) >= 8
+      );
+      if (lowEnergyDays.length >= 1 && highEnergyDays.length >= 1) {
+        storyIdeas.push({
+          id: `story-${endDate.toISOString().split("T")[0]}-energy`,
+          theme: "energy-management",
+          title: "The Energy Rollercoaster of Building",
+          source_entries: [...lowEnergyDays.map(e => e.date), ...highEnergyDays.map(e => e.date)],
+          excerpt: `Low energy days: ${lowEnergyDays.length}, High energy days: ${highEnergyDays.length}`,
+          suggested_tags: ["productivity", "burnout", "energy-management"],
+        });
+      }
+
+      return {
+        content: [{ type: "text", text: JSON.stringify({
+          story_ideas: storyIdeas,
+          count: storyIdeas.length,
+          entries_analyzed: entriesData.length,
+          date_range: {
+            from: startDate.toISOString().split("T")[0],
+            to: endDate.toISOString().split("T")[0],
+          },
+        }, null, 2) }],
+      };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Failed to extract story ideas: ${error instanceof Error ? error.message : "Unknown error"}` }] };
+    }
+  }
+);
+
 // HTTP Server for Vercel/remote deployment
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 
