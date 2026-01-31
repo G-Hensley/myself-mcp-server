@@ -146,6 +146,35 @@ async function writeJsonFile(relativePath: string, data: unknown, message: strin
   await writeToGitHub(relativePath, content, message);
 }
 
+// Helper to list directory contents from GitHub
+async function listDirectory(relativePath: string): Promise<Array<{ name: string; type: "file" | "dir"; path: string }>> {
+  const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${relativePath}?ref=${GITHUB_BRANCH}`;
+  const headers: Record<string, string> = {
+    "Accept": "application/vnd.github.v3+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "User-Agent": "myself-mcp-server",
+  };
+
+  if (GITHUB_TOKEN) {
+    headers["Authorization"] = `Bearer ${GITHUB_TOKEN}`;
+  }
+
+  const response = await fetch(url, { headers });
+  if (!response.ok) {
+    if (response.status === 404) {
+      return []; // Directory doesn't exist
+    }
+    throw new Error(`Failed to list directory ${relativePath}: ${response.status}`);
+  }
+
+  const data = await response.json() as Array<{ name: string; type: string; path: string }>;
+  return data.map(item => ({
+    name: item.name,
+    type: item.type === "dir" ? "dir" : "file",
+    path: item.path,
+  }));
+}
+
 // Note: We don't use outputSchema because it requires structuredContent responses.
 // Our tools return plain text content which doesn't need schema validation.
 
@@ -3449,6 +3478,292 @@ server.registerTool(
       };
     } catch (error) {
       return { content: [{ type: "text", text: `Failed to extract story ideas: ${error instanceof Error ? error.message : "Unknown error"}` }] };
+    }
+  }
+);
+
+// ===== CLAUDE PROJECTS TOOLS =====
+
+// Tool: Get Claude Projects
+server.registerTool(
+  "get_claude_projects",
+  {
+    title: "Get Claude Projects",
+    description: "List all Claude.ai projects with their PURPOSE.md summaries. Projects are stored in .claude/claude-projects/",
+  },
+  async () => {
+    try {
+      const projectsDir = ".claude/claude-projects";
+      const projects = await listDirectory(projectsDir);
+
+      const projectList: Array<{
+        name: string;
+        path: string;
+        purpose_summary: string | null;
+        has_instructions: boolean;
+      }> = [];
+
+      for (const item of projects) {
+        if (item.type !== "dir") continue;
+
+        let purposeSummary: string | null = null;
+        let hasInstructions = false;
+
+        try {
+          const purposeContent = await fetchFromGitHub(`${projectsDir}/${item.name}/PURPOSE.md`);
+          // Extract first paragraph after the title as summary
+          const lines = purposeContent.split("\n").filter(l => l.trim() && !l.startsWith("#"));
+          purposeSummary = lines.slice(0, 3).join(" ").substring(0, 300);
+        } catch {
+          // PURPOSE.md doesn't exist
+        }
+
+        try {
+          await fetchFromGitHub(`${projectsDir}/${item.name}/INSTRUCTIONS.xml`);
+          hasInstructions = true;
+        } catch {
+          // INSTRUCTIONS.xml doesn't exist
+        }
+
+        projectList.push({
+          name: item.name,
+          path: `${projectsDir}/${item.name}`,
+          purpose_summary: purposeSummary,
+          has_instructions: hasInstructions,
+        });
+      }
+
+      return {
+        content: [{ type: "text", text: JSON.stringify({
+          projects: projectList,
+          count: projectList.length,
+          base_path: projectsDir,
+        }, null, 2) }],
+      };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Failed to list Claude projects: ${error instanceof Error ? error.message : "Unknown error"}` }] };
+    }
+  }
+);
+
+// Tool: Get Claude Project Details
+server.registerTool(
+  "get_claude_project",
+  {
+    title: "Get Claude Project",
+    description: "Get details of a specific Claude.ai project including INSTRUCTIONS.xml and PURPOSE.md content",
+    inputSchema: {
+      name: z.string().describe("Project folder name (e.g., 'home-base', 'nexus', 'daily-check-in')"),
+    },
+  },
+  async ({ name }) => {
+    try {
+      const projectPath = `.claude/claude-projects/${name}`;
+
+      let instructions: string | null = null;
+      let purpose: string | null = null;
+      const otherFiles: string[] = [];
+
+      try {
+        instructions = await fetchFromGitHub(`${projectPath}/INSTRUCTIONS.xml`);
+      } catch {
+        // File doesn't exist
+      }
+
+      try {
+        purpose = await fetchFromGitHub(`${projectPath}/PURPOSE.md`);
+      } catch {
+        // File doesn't exist
+      }
+
+      // List other files in the project
+      try {
+        const files = await listDirectory(projectPath);
+        for (const file of files) {
+          if (file.name !== "INSTRUCTIONS.xml" && file.name !== "PURPOSE.md") {
+            otherFiles.push(file.name);
+          }
+        }
+      } catch {
+        // Directory might not exist
+      }
+
+      if (!instructions && !purpose) {
+        return { content: [{ type: "text", text: `Project '${name}' not found or has no content` }] };
+      }
+
+      return {
+        content: [{ type: "text", text: JSON.stringify({
+          name,
+          path: projectPath,
+          instructions: instructions ? { exists: true, content: instructions } : { exists: false },
+          purpose: purpose ? { exists: true, content: purpose } : { exists: false },
+          other_files: otherFiles,
+        }, null, 2) }],
+      };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Failed to get Claude project: ${error instanceof Error ? error.message : "Unknown error"}` }] };
+    }
+  }
+);
+
+// Tool: Create Claude Project
+server.registerTool(
+  "create_claude_project",
+  {
+    title: "Create Claude Project",
+    description: "Create a new Claude.ai project folder with INSTRUCTIONS.xml and PURPOSE.md templates",
+    inputSchema: {
+      name: z.string().describe("Project folder name (lowercase, hyphenated, e.g., 'my-new-project')"),
+      display_name: z.string().describe("Human-readable project name (e.g., 'My New Project')"),
+      summary: z.string().describe("One-sentence summary of the project's purpose"),
+      scope: z.array(z.string()).optional().describe("List of in-scope responsibilities"),
+      out_of_scope: z.array(z.string()).optional().describe("List of out-of-scope items"),
+      tone: z.string().optional().describe("Personality/tone description (e.g., 'Casual, direct, and supportive')"),
+      mcp_tools: z.array(z.string()).optional().describe("MCP tools this project should use"),
+    },
+  },
+  async ({ name, display_name, summary, scope, out_of_scope, tone, mcp_tools }) => {
+    try {
+      const projectPath = `.claude/claude-projects/${name}`;
+      const today = new Date().toISOString().split("T")[0];
+
+      // Create PURPOSE.md
+      const purposeContent = `# ${display_name}
+
+## Purpose
+${summary}
+
+## Key Responsibilities
+${scope?.map(s => `- ${s}`).join("\n") || "- (To be defined)"}
+
+## MCP Tools Used
+${mcp_tools?.map(t => `- \`${t}\``).join("\n") || "- (To be defined)"}
+
+## Out of Scope
+${out_of_scope?.map(s => `- ${s}`).join("\n") || "- (To be defined)"}
+
+---
+_Created: ${today}_
+`;
+
+      await writeToGitHub(`${projectPath}/PURPOSE.md`, purposeContent, `Create Claude project: ${display_name}`);
+
+      // Create INSTRUCTIONS.xml template
+      const instructionsContent = `<?xml version="1.0" encoding="UTF-8"?>
+<claude_project>
+  <name>${display_name}</name>
+
+  <summary>
+    ${summary}
+  </summary>
+
+  <personality>
+    <tone>
+      ${tone || "Casual, direct, and helpful."}
+    </tone>
+
+    <approach>
+      You're a thought partner AND executor. That means:
+      - Ask clarifying questions before diving in (don't assume)
+      - Present multiple options with your recommendation highlighted
+      - Actually do the work, don't just talk about it
+      - Be proactive - spot opportunities and mention them
+    </approach>
+
+    <honesty_policy>
+      If you don't know something, say "I don't know" or "I couldn't find that."
+      If you're uncertain, say so. Don't hallucinate data, metrics, or facts.
+      It's always better to be honest than to bullshit.
+    </honesty_policy>
+  </personality>
+
+  <myself_mcp_tools>
+    <description>
+      The Myself MCP contains relevant data. Here are the tools to use:
+    </description>
+
+    <tools>
+${mcp_tools?.map(t => `      <tool name="${t}">Description here</tool>`).join("\n") || "      <!-- Add relevant tools -->"}
+    </tools>
+  </myself_mcp_tools>
+
+  <scope>
+    <in_scope>
+${scope?.map(s => `      <item>${s}</item>`).join("\n") || "      <!-- Define in-scope items -->"}
+    </in_scope>
+
+    <out_of_scope>
+${out_of_scope?.map(s => `      <item>${s}</item>`).join("\n") || "      <!-- Define out-of-scope items -->"}
+    </out_of_scope>
+  </scope>
+
+  <key_reminders>
+    <reminder>Auto-fetch relevant context at conversation start</reminder>
+    <reminder>Be honest - say "I don't know" when you don't know</reminder>
+    <reminder>Never use em dashes</reminder>
+  </key_reminders>
+</claude_project>
+`;
+
+      await writeToGitHub(`${projectPath}/INSTRUCTIONS.xml`, instructionsContent, `Add instructions for: ${display_name}`);
+
+      return {
+        content: [{ type: "text", text: JSON.stringify({
+          success: true,
+          project: {
+            name,
+            display_name,
+            path: projectPath,
+            files_created: ["PURPOSE.md", "INSTRUCTIONS.xml"],
+          },
+          message: `Created Claude project '${display_name}' at ${projectPath}`,
+        }, null, 2) }],
+      };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Failed to create Claude project: ${error instanceof Error ? error.message : "Unknown error"}` }] };
+    }
+  }
+);
+
+// Tool: Update Claude Project File
+server.registerTool(
+  "update_claude_project_file",
+  {
+    title: "Update Claude Project File",
+    description: "Create or update a file in a Claude.ai project folder. Can update INSTRUCTIONS.xml, PURPOSE.md, or create new files.",
+    inputSchema: {
+      project: z.string().describe("Project folder name (e.g., 'home-base', 'nexus')"),
+      filename: z.string().describe("File to create/update (e.g., 'PURPOSE.md', 'INSTRUCTIONS.xml', 'custom-file.md')"),
+      content: z.string().describe("Full file content"),
+    },
+  },
+  async ({ project, filename, content }) => {
+    try {
+      const filePath = `.claude/claude-projects/${project}/${filename}`;
+
+      // Check if this is an update or create
+      let isUpdate = false;
+      try {
+        await getFileSha(filePath);
+        isUpdate = true;
+      } catch {
+        // File doesn't exist, this is a create
+      }
+
+      await writeToGitHub(filePath, content, `${isUpdate ? "Update" : "Create"} ${filename} in ${project}`);
+
+      return {
+        content: [{ type: "text", text: JSON.stringify({
+          success: true,
+          action: isUpdate ? "updated" : "created",
+          project,
+          filename,
+          path: filePath,
+        }, null, 2) }],
+      };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Failed to update Claude project file: ${error instanceof Error ? error.message : "Unknown error"}` }] };
     }
   }
 );
